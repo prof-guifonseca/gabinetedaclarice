@@ -1,0 +1,4 @@
+# Copie este arquivo para .dev.vars e preencha sua chave local
+OPENAI_API_KEY=sk-your-openai-key
+# Opcional: senha simples de portaria para restringir acesso
+ACCESS_CODE=
