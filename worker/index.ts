@@ -723,37 +723,62 @@ app.post("/api/director", async (c) => {
     });
   }
 
-  const model = c.env.OPENAI_TEXT_MODEL || "gpt-6-luna";
+  const model =
+    (c.env as unknown as Record<string, string | undefined>).OPENAI_DIRECTOR_MODEL ||
+    c.env.OPENAI_TEXT_MODEL ||
+    "gpt-6-luna";
 
-  try {
-    const upstream = await fetch("https://api.openai.com/v1/responses", {
+  const callDirector = async (reasoningEffort?: "minimal" | "low") => {
+    const payload: Record<string, unknown> = {
+      model,
+      instructions: buildDirectorInstructions(ledger),
+      input: [
+        {
+          role: "user",
+          content: `Visitante disse: "${userMessage || "(início / fala por voz)"}"\nClarice respondeu: "${assistantReply}"`,
+        },
+      ],
+      text: {
+        format: {
+          type: "json_schema",
+          name: "clarice_director_patch",
+          strict: true,
+          schema: DIRECTOR_RESPONSE_SCHEMA,
+        },
+      },
+      max_output_tokens: 1400,
+    };
+    if (reasoningEffort) {
+      payload.reasoning = { effort: reasoningEffort };
+    }
+    return fetch("https://api.openai.com/v1/responses", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${c.env.OPENAI_API_KEY}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        model,
-        instructions: buildDirectorInstructions(ledger),
-        input: [
-          {
-            role: "user",
-            content: `Visitante disse: "${userMessage || "(início / fala por voz)"}"\nClarice respondeu: "${assistantReply}"`,
-          },
-        ],
-        text: {
-          format: {
-            type: "json_schema",
-            name: "clarice_director_patch",
-            strict: true,
-            schema: DIRECTOR_RESPONSE_SCHEMA,
-          },
-        },
-        max_output_tokens: 1800,
-      }),
+      body: JSON.stringify(payload),
     });
+  };
+
+  try {
+    let upstream = await callDirector("minimal");
+    if (!upstream.ok && (upstream.status === 400 || upstream.status === 422)) {
+      upstream = await callDirector("low");
+    }
+    if (!upstream.ok && (upstream.status === 400 || upstream.status === 422)) {
+      upstream = await callDirector(undefined);
+    }
 
     if (!upstream.ok) {
+      const errDetail = await upstream.text();
+      console.warn(
+        JSON.stringify({
+          event: "director_upstream_fallback",
+          status: upstream.status,
+          detail: errDetail.slice(0, 260),
+        })
+      );
       return c.json({
         patch: buildFallbackDirectorPatch(userMessage, assistantReply, ledger),
         source: "fallback",
@@ -764,7 +789,13 @@ app.post("/api/director", async (c) => {
     const rawJsonText = extractResponseText(parsed);
     const patch = sanitizeDirectorPatch(JSON.parse(rawJsonText));
     return c.json({ patch, source: "model" });
-  } catch {
+  } catch (err) {
+    console.warn(
+      JSON.stringify({
+        event: "director_exception_fallback",
+        error: err instanceof Error ? err.message : String(err),
+      })
+    );
     return c.json({
       patch: buildFallbackDirectorPatch(userMessage, assistantReply, ledger),
       source: "fallback",

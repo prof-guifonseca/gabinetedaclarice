@@ -41,6 +41,10 @@ export function SessionSummaryModal({
 
   const arch = classifyVisitorArchetype(ledger);
   const scenario = SCENARIOS[ledger.scenarioId] ?? SCENARIOS.livre;
+  const modalHeadline =
+    ledger.endedTitle && ledger.endedTitle !== arch.title
+      ? ledger.endedTitle
+      : "Resumo da Audiência";
 
   const handleShare = async (mode: "copy" | "download") => {
     setBusy(true);
@@ -83,12 +87,12 @@ export function SessionSummaryModal({
         className="modal-card modal-wide summary-card"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="modal-header-row">
+        <div className="modal-header-row is-sticky">
           <div>
             <p className="modal-kicker">
               BOLETIM DA GUERRA CULTURAL · {scenario.title.toUpperCase()}
             </p>
-            <h3>{ledger.endedTitle || arch.title}</h3>
+            <h3>{modalHeadline}</h3>
           </div>
           <button
             type="button"
@@ -119,7 +123,9 @@ export function SessionSummaryModal({
           </div>
           <div className="summary-stat">
             <span>Funil Hotmart</span>
-            <strong>R$ {ledger.meters.faturamentoHotmartK}k</strong>
+            <strong className="nowrap-val">
+              R$&nbsp;{ledger.meters.faturamentoHotmartK}k
+            </strong>
           </div>
           <div className="summary-stat">
             <span>Compostura</span>
@@ -167,7 +173,7 @@ export function SessionSummaryModal({
             onClick={() => void handleShare("copy")}
           >
             <Copy size={16} />
-            {statusMsg || "Copiar Boletim p/ WhatsApp"}
+            {statusMsg || "Copiar PNG"}
           </button>
           <button
             type="button"
@@ -180,7 +186,7 @@ export function SessionSummaryModal({
           </button>
           <button
             type="button"
-            className="btn-secondary"
+            className="btn-secondary is-full-mobile"
             onClick={() => {
               onClose();
               onRestart();

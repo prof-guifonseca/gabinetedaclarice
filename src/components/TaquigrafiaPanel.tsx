@@ -1,7 +1,20 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Check, Mic, MicOff, Send, Share2 } from "lucide-react";
+import {
+  Check,
+  Clapperboard,
+  FileText,
+  Mic,
+  MicOff,
+  Send,
+  Share2,
+  ShoppingBag,
+} from "lucide-react";
 import type { ChatEntry } from "../hooks/useGptLiveSession";
-import type { AvatarMood, SuggestedMove } from "../shared/gameState";
+import type {
+  AvatarMood,
+  CabinetDocument,
+  SuggestedMove,
+} from "../shared/gameState";
 import { ActionDeck } from "./ActionDeck";
 import {
   generateQuoteCard,
@@ -18,6 +31,41 @@ interface TaquigrafiaPanelProps {
   micCutSecondsLeft: number;
   onSendText: (message: string) => void;
   onToggleVoiceCall: () => void;
+  onInspectDocument: (doc: CabinetDocument) => void;
+}
+
+function getDocumentCardMeta(doc: CabinetDocument): {
+  variant: "is-reels" | "is-hotmart" | "is-denuncia";
+  tag: string;
+  cta: string;
+  title: string;
+  subtitle: string;
+} {
+  if (doc.action.type === "gravar_corte_reels") {
+    return {
+      variant: "is-reels",
+      tag: `● CORTE VIRAL · ${doc.action.viewsEstimadas} VIEWS`,
+      cta: "Ver Reels & PNG →",
+      title: doc.action.tituloViral,
+      subtitle: `${doc.action.hashtag} · ${doc.action.legendaCorte.slice(0, 88)}`,
+    };
+  }
+  if (doc.action.type === "lancar_oferta_hotmart") {
+    return {
+      variant: "is-hotmart",
+      tag: `HOTMART VIP · ${doc.action.cupom} · +R$ ${doc.action.valorFaturadoK}k`,
+      cta: "Ver Oferta & PNG →",
+      title: `${doc.action.nomeProduto} (${doc.action.parcela})`,
+      subtitle: doc.action.modulosBonus.slice(0, 96),
+    };
+  }
+  return {
+    variant: "is-denuncia",
+    tag: `ESCOLA SEM DOUTRINAÇÃO · ${doc.action.protocolo}`,
+    cta: "Abrir Ofício & PNG →",
+    title: doc.action.instituicao,
+    subtitle: doc.action.acusacaoAbsurda.slice(0, 96),
+  };
 }
 
 export function TaquigrafiaPanel({
@@ -30,20 +78,27 @@ export function TaquigrafiaPanel({
   micCutSecondsLeft,
   onSendText,
   onToggleVoiceCall,
+  onInspectDocument,
 }: TaquigrafiaPanelProps) {
   const [draft, setDraft] = useState("");
+  const [sharingId, setSharingId] = useState<string | null>(null);
   const [copiedMeta, setCopiedMeta] = useState<{
     id: string;
     label: string;
   } | null>(null);
+  const [toastMsg, setToastMsg] = useState<string | null>(null);
   const feedRef = useRef<HTMLDivElement | null>(null);
 
   const isInputBlocked = isSendingText || micCutSecondsLeft > 0;
 
+  // Bulletproof scroll-to-bottom on every entry delta, inline act card, or typing indicator
   useEffect(() => {
-    if (feedRef.current) {
-      feedRef.current.scrollTop = feedRef.current.scrollHeight;
-    }
+    const feed = feedRef.current;
+    if (!feed) return;
+    const raf = requestAnimationFrame(() => {
+      feed.scrollTop = feed.scrollHeight;
+    });
+    return () => cancelAnimationFrame(raf);
   }, [entries, isSendingText]);
 
   const handleSubmit = (e: FormEvent) => {
@@ -54,11 +109,20 @@ export function TaquigrafiaPanel({
     onSendText(trimmed);
   };
 
+  const showToast = (msg: string) => {
+    setToastMsg(msg);
+    window.setTimeout(() => {
+      setToastMsg((curr) => (curr === msg ? null : curr));
+    }, 2600);
+  };
+
   const handleShareQuote = async (entry: ChatEntry) => {
+    if (sharingId) return;
+    setSharingId(entry.id);
     try {
       const blob = await generateQuoteCard({
         quote: entry.text,
-        mood: (entry.mood as AvatarMood) || "falando",
+        mood: (entry.mood as AvatarMood) || "reels",
         badge: scenarioBadge,
       });
       const result = await shareImageNativeOrCopy(
@@ -74,11 +138,20 @@ export function TaquigrafiaPanel({
           ? "Copiado!"
           : "PNG salvo!";
       setCopiedMeta({ id: entry.id, label });
+      showToast(
+        result === "shared"
+          ? "Card compartilhado!"
+          : result === "copied"
+          ? "Card PNG copiado! Cole no WhatsApp."
+          : "Card PNG salvo no seu dispositivo!"
+      );
       window.setTimeout(() => {
         setCopiedMeta((curr) => (curr?.id === entry.id ? null : curr));
-      }, 2400);
+      }, 2600);
     } catch {
-      // ignore canvas errors
+      showToast("Não foi possível gerar o card agora.");
+    } finally {
+      setSharingId(null);
     }
   };
 
@@ -87,13 +160,48 @@ export function TaquigrafiaPanel({
       className="panel-card chat-card"
       aria-label="Transcrição do Estúdio-Gabinete 222"
     >
-      <div className="tv-ticker-bar" aria-live="polite">
+      <div className="tv-ticker-bar" aria-live="polite" title={headlineTicker}>
         <span className="tv-ticker-tag">● REELS LIVE</span>
         <span className="tv-ticker-text">{headlineTicker}</span>
       </div>
 
+      {toastMsg && (
+        <div className="chat-toast" role="status">
+          {toastMsg}
+        </div>
+      )}
+
       <div className="chat-feed" ref={feedRef}>
         {entries.map((entry) => {
+          if (entry.document) {
+            const doc = entry.document;
+            const meta = getDocumentCardMeta(doc);
+            return (
+              <button
+                key={entry.id}
+                type="button"
+                className={`inline-doc-card ${meta.variant}`}
+                onClick={() => onInspectDocument(doc)}
+              >
+                <div className="inline-doc-top">
+                  <span className="inline-doc-tag">
+                    {doc.action.type === "gravar_corte_reels" ? (
+                      <Clapperboard size={12} />
+                    ) : doc.action.type === "lancar_oferta_hotmart" ? (
+                      <ShoppingBag size={12} />
+                    ) : (
+                      <FileText size={12} />
+                    )}
+                    {meta.tag}
+                  </span>
+                  <span className="inline-doc-cta">{meta.cta}</span>
+                </div>
+                <strong className="inline-doc-title">{meta.title}</strong>
+                <span className="inline-doc-sub">{meta.subtitle}</span>
+              </button>
+            );
+          }
+
           if (entry.role === "system") {
             return (
               <div key={entry.id} className="msg-bubble is-system">
@@ -104,6 +212,8 @@ export function TaquigrafiaPanel({
 
           const isAssistant = entry.role === "assistant";
           const canShare = isAssistant && entry.text.trim().length >= 24;
+          const isBusy = sharingId === entry.id;
+          const isDone = copiedMeta?.id === entry.id;
 
           return (
             <article
@@ -118,19 +228,20 @@ export function TaquigrafiaPanel({
                   {canShare && (
                     <button
                       type="button"
-                      className={`quote-share-btn ${
-                        copiedMeta?.id === entry.id ? "is-done" : ""
-                      }`}
+                      className={`quote-share-btn ${isDone ? "is-done" : ""}`}
+                      disabled={isBusy}
                       onClick={() => void handleShareQuote(entry)}
                       title="Gerar card PNG 'Corte do Gabinete 222' para WhatsApp"
                     >
-                      {copiedMeta?.id === entry.id ? (
+                      {isBusy ? (
+                        "Gerando..."
+                      ) : isDone ? (
                         <>
                           <Check size={11} /> {copiedMeta.label}
                         </>
                       ) : (
                         <>
-                          <Share2 size={11} /> Aspas
+                          <Share2 size={11} /> Corte
                         </>
                       )}
                     </button>
@@ -177,10 +288,10 @@ export function TaquigrafiaPanel({
           onChange={(e) => setDraft(e.target.value)}
           placeholder={
             micCutSecondsLeft > 0
-              ? `Gravando corte pro Reels — mic silenciado (${micCutSecondsLeft}s)...`
+              ? `Gravando corte pro Reels (${micCutSecondsLeft}s)...`
               : isLive
-              ? "Fale no microfone ou mande um recado aqui..."
-              : "Converse com a Dep. Clarice ou escolha uma Carta na Manga..."
+              ? "Fale ou digite aqui..."
+              : "Fale com a Dep. Clarice..."
           }
           maxLength={1200}
         />

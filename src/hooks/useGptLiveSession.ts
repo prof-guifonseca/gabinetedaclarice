@@ -6,7 +6,7 @@ import {
   type AvatarMood,
   type RecentTurn,
 } from "../shared/persona";
-import type { SessionLedger } from "../shared/gameState";
+import type { CabinetDocument, SessionLedger } from "../shared/gameState";
 
 export type LiveConnectionState = "idle" | "connecting" | "live" | "error";
 
@@ -18,6 +18,7 @@ export interface ChatEntry {
   timestamp: string;
   mood?: AvatarMood;
   itemKey?: string;
+  document?: CabinetDocument;
 }
 
 interface ConnectOptions {

@@ -515,7 +515,9 @@ export function applyDirectorPatch(
     } else if (
       ledger.scenarioId === "mentoria_hotmart" &&
       (nextMeters.faturamentoHotmartK >= 180 ||
-        documents.some((d) => d.action.type === "lancar_oferta_hotmart"))
+        (nextTurn >= 2 &&
+          nextMeters.faturamentoHotmartK >= 140 &&
+          documents.some((d) => d.action.type === "lancar_oferta_hotmart")))
     ) {
       endedReason = "vitoria";
       endedTitle = "Carrinho Hotmart Explodiu — Turma VIP Fechada!";
@@ -582,7 +584,7 @@ export function classifyVisitorArchetype(ledger: SessionLedger): VisitorArchetyp
     (d) => d.action.type === "protocolar_denuncia_escola"
   );
 
-  if (ledger.endedReason === "expulso" || ledger.ringLightCutsCount >= 2 || hasDenuncia) {
+  if (ledger.endedReason === "expulso") {
     return {
       id: "alvo_canal_denuncias",
       title: "Alvo do Canal de Denúncias",
@@ -596,8 +598,17 @@ export function classifyVisitorArchetype(ledger: SessionLedger): VisitorArchetyp
       id: "desmascarador_tradwife",
       title: "Desmascarador do Paradoxo Tradwife",
       subtitle:
-        "Expos as 3 babás em SC, o marido no WhatsApp e o salário de Brasília ao vivo no Gabinete 222.",
+        "Expôs as 3 babás em SC, o marido no WhatsApp e o salário de Brasília ao vivo no Gabinete 222.",
       stamp: "PARADOXO EXPOSTO",
+    };
+  }
+  if (ledger.ringLightCutsCount >= 2 || hasDenuncia) {
+    return {
+      id: "alvo_canal_denuncias",
+      title: "Alvo do Canal de Denúncias",
+      subtitle:
+        "Teve o microfone cortado pelo Ring Light e acabou notificado por suspeita de Escola de Frankfurt.",
+      stamp: "NOTIFICADO",
     };
   }
   if (hasHotmart || ledger.meters.faturamentoHotmartK >= 180) {

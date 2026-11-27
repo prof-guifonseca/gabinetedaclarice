@@ -33,7 +33,7 @@ export function ScenarioDrawer({
         className="modal-card modal-wide"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="modal-header-row">
+        <div className="modal-header-row is-sticky">
           <div>
             <p className="modal-kicker">
               PORTARIA DO ANEXO IV · CRACHÁ DO GABINETE 222

@@ -93,6 +93,9 @@ describe("Mente da Clarice (antifeminismo satírico, Trinca Caótica & voz femin
     expect(
       inferMoodFromText("Vamos conversar com calma sobre os fatos históricos.")
     ).toBe("falando");
+    expect(
+      inferMoodFromText("Fizemos um recorte histórico num sprint de aula.")
+    ).toBe("falando");
   });
 });
 

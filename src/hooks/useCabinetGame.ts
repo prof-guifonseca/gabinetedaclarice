@@ -216,7 +216,7 @@ export function useCabinetGame() {
           }, 3400);
         }
 
-        // Tactile Studio & Cabinet Actions
+        // Tactile Studio & Cabinet Actions (Documents appear as inline clickable cards — never hijacking the screen!)
         if (firedAction.type === "bater_livro_mesa") {
           triggerBookSlamShake();
           params.onSystemEvent(`📕 Best-Seller na mesa: ${firedAction.motivo}`);
@@ -229,28 +229,16 @@ export function useCabinetGame() {
           );
         } else if (firedAction.type === "gravar_corte_reels" && newDocument) {
           triggerRingLightFlash();
-          setActiveDocument(newDocument);
-          params.onSystemEvent(
-            `🎬 Corte pro Reels gravado (${firedAction.viewsEstimadas} views): "${firedAction.tituloViral}"`
-          );
         } else if (
           firedAction.type === "protocolar_denuncia_escola" &&
           newDocument
         ) {
           cabinetSfx.playStampThud();
-          setActiveDocument(newDocument);
-          params.onSystemEvent(
-            `📋 Ofício ${firedAction.protocolo} protocolado no Canal Escola Sem Doutrinação contra ${firedAction.instituicao}!`
-          );
         } else if (
           firedAction.type === "lancar_oferta_hotmart" &&
           newDocument
         ) {
           cabinetSfx.playHotmartChaChing();
-          setActiveDocument(newDocument);
-          params.onSystemEvent(
-            `💰 Oferta Hotmart no ar (${firedAction.cupom}): ${firedAction.nomeProduto} (${firedAction.parcela}) — +R$ ${firedAction.valorFaturadoK}k!`
-          );
         }
 
         // Backstage Interrupts
@@ -346,7 +334,7 @@ export function useCabinetGame() {
           window.setTimeout(() => setShowSummary(true), 1200);
         }
 
-        return { patch, ledger: finalLedger };
+        return { patch, ledger: finalLedger, newDocument };
       } catch {
         return null;
       }

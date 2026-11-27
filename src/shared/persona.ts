@@ -159,13 +159,13 @@ REGRAS DE DIREÇÃO:
    - "falando": explicando energicamente com didatismo firme sem estar gravando corte nem em crise.
    - "neutro": calma e açucarada.
 2. "meterDelta": deltas divertidos e responsivos (-25 a +25; faturamentoHotmartK só sobe quando ela de fato vende/oferta curso ou livro!). Se o visitante expôs contradições dela (salário em Brasília, mandar no marido, 3 babás, voto feminino, foto de bolo): paradoxoTradwife sobe (+10 a +24) e compostura cai (-6 a -18). Se o visitante elogiou, pediu curso ou concordou na guerra cultural: cortesVirais sobe (+8 a +22) e compostura pode subir (+4 a +10).
-3. "action": dispare ações físicas memoráveis com ritmo vivo quando a fala da Clarice JUSTIFICAR (especialmente a partir do turno 2 ou quando o tema encaixar direto):
-   - "gravar_corte_reels": quando Clarice mandar uma "mitada", chamar o Enzo/ring light ou transformar a resposta em corte viral! Crie um "tituloViral" hilário em CAIXA ALTA.
+3. "action": dispare ações físicas memoráveis com ritmo orgânico (NÃO emita documento em 100% dos turnos seguidos! Evite repetir o mesmo tipo de documento em turnos consecutivos; intercale "none" ou reações físicas leves como "bater_livro_mesa" / "ligar_ring_light_silenciar" para dar ritmo cômico real):
+   - "gravar_corte_reels": quando Clarice mandar uma "mitada" épica, chamar o Enzo/ring light ou transformar a resposta em corte viral! Crie um "tituloViral" hilário em CAIXA ALTA.
    - "protocolar_denuncia_escola": quando Clarice ameaçar denunciar professor/escola/universidade/Prof. Bento no Canal Escola Sem Doutrinação!
-   - "lancar_oferta_hotmart": quando Clarice ofertar o livro, cupom FAMILIA10 ou Mentoria Esposa de Alto Valor! Defina valorFaturadoK entre 30 e 95 e um "modulosBonus" hilário.
+   - "lancar_oferta_hotmart": quando Clarice ofertar explicitamente o livro, cupom FAMILIA10 ou Mentoria Esposa de Alto Valor! Defina valorFaturadoK entre 30 e 85 e um "modulosBonus" hilário.
    - "ligar_ring_light_silenciar": quando Clarice mandar o visitante ficar quietinho pro corte de 60 segundos ou a compostura estiver baixa (segundos: 4 ou 5).
    - "bater_livro_mesa": quando Clarice se indignar citando o livro dela ou dando bronca dura.
-   - "none": nos demais turnos normais.
+   - "none": nos turnos de preparação, diálogo corrido ou logo após já ter emitido documento no turno anterior.
 4. "usedTropes": liste 1 a 3 etiquetas curtas dos clichês que Clarice acabou de usar (ex: "escola de frankfurt", "burnout e gatos", "3 babas", "pao artesanal", "hotmart", "prof bento", "dr vava", "canal denuncias", "davos") para cooldown.
 5. "newFacts": liste 0 a 2 fatos curtos novos revelados ou combinados na conversa.
 6. "suggestedMoves": crie exatamente 3 "Cartas na Manga" para o próximo turno (1 de "acordo", 1 de "pressao", 1 de "blefe"), cada uma com "label" curto com emoji (até 4 palavras) e "prompt" escrito em PRIMEIRA PESSOA como fala direta e coloquial do Visitante conversando cara a cara com a Clarice (ex: "Deputada, e as três babás em Santa Catarina enquanto a senhora prega que mulher não deve trabalhar fora?" — PROIBIDO escrever instrução imperativa tipo "Pergunte..." ou "Peça...").
@@ -285,17 +285,17 @@ export function inferMoodFromText(
   fallback: AvatarMood = "falando"
 ): AvatarMood {
   const t = text.toLowerCase();
-  if (/(fabrício|marido|whatsapp|zap|babá|bistrô|flagra|dona neide|print)/.test(t)) {
+  if (/(fabrício|marido|whatsapp|\bzap\b|babá|bistrô|flagra|dona neide|\bprint\b)/.test(t)) {
     return "celular";
   }
-  if (/(hotmart|mentoria|cupom|link na bio|12x|197|livro|página 42|best-seller|armadilha de frankfurt)/.test(t)) {
+  if (/(hotmart|mentoria|cupom|link na bio|12x|\b197\b|\blivro\b|página 42|best-seller|armadilha de frankfurt)/.test(t)) {
     return "livro";
   }
-  if (/(enzo|reels|ring light|corte|thumbnail|viral|câmera|views|instagram)/.test(t)) {
+  if (/(\benzo\b|\breels\b|ring light|\bcorte\b|thumbnail|viral|câmera|\bviews\b|instagram)/.test(t)) {
     return "reels";
   }
   if (
-    /(doutrina|denúncia|denunciar|marxismo cultural|frankfurt|subvers|prof\. bento|bento|boicote|escândalo|inaceitável|absurdo|censura|silêncio|notific|gravar em 4k)/.test(
+    /(doutrina|denúncia|denunciar|marxismo cultural|frankfurt|subvers|prof\. bento|\bbento\b|boicote|escândalo|inaceitável|absurdo|censura|silêncio|notific|gravar em 4k)/.test(
       t
     )
   ) {

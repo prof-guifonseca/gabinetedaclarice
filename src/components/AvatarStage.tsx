@@ -103,184 +103,198 @@ export function AvatarStage({
       className={`panel-card avatar-stage ${isDeskShaking ? "is-desk-shaking" : ""}`}
       aria-label='Dep. Prof.ª Clarice "Clá" Alencar'
     >
-      <div
-        className={`avatar-viewport ${isSpeaking ? "is-speaking" : ""} ${
-          ringLightFlash ? "is-ring-flash" : ""
-        }`}
-        data-mood={activeMood}
-        style={viewportStyle}
-      >
-        {(Object.keys(AVATAR_SOURCES) as AvatarMood[]).map((key) => (
-          <img
-            key={key}
-            src={AVATAR_SOURCES[key]}
-            alt='Dep. Prof.ª Clarice "Clá" Alencar'
-            className={`avatar-img ${activeMood === key ? "is-active" : ""}`}
-          />
-        ))}
+      <div className="stage-shell">
+        <div
+          className={`avatar-viewport ${isSpeaking ? "is-speaking" : ""} ${
+            ringLightFlash ? "is-ring-flash" : ""
+          }`}
+          data-mood={activeMood}
+          style={viewportStyle}
+        >
+          {(Object.keys(AVATAR_SOURCES) as AvatarMood[]).map((key) => (
+            <img
+              key={key}
+              src={AVATAR_SOURCES[key]}
+              alt='Dep. Prof.ª Clarice "Clá" Alencar'
+              className={`avatar-img ${activeMood === key ? "is-active" : ""}`}
+            />
+          ))}
 
-        <div className="avatar-vignette" />
-        <div className="avatar-halo" />
+          <div className="avatar-vignette" />
+          <div className="avatar-halo" />
 
-        <div className="studio-bug">
-          <span
-            className={`tv-dot ${
-              status === "live" || activeMood === "reels" ? "is-live" : ""
-            }`}
-          />
-          <span>
-            {status === "live"
-              ? isStandby
-                ? "EM ESPERA · GAB. 222"
-                : "AO VIVO · RING LIGHT"
-              : "GABINETE 222 · ANEXO IV"}
-          </span>
-          <span className="tv-mood-pill">{MOOD_LABELS[activeMood]}</span>
-        </div>
+          <div className="studio-bug">
+            <span
+              className={`tv-dot ${
+                status === "live" || activeMood === "reels" ? "is-live" : ""
+              }`}
+            />
+            <span>
+              {status === "live"
+                ? isStandby
+                  ? "EM ESPERA · GAB. 222"
+                  : "AO VIVO · RING LIGHT"
+                : "GABINETE 222 · ANEXO IV"}
+            </span>
+            <span className="tv-mood-pill">{MOOD_LABELS[activeMood]}</span>
+          </div>
 
-        {activeInterrupt && (
-          <div className="interrupt-ribbon" role="status">
-            <Radio size={13} />
-            <div>
-              <strong>{activeInterrupt.badge}</strong>
-              <span>{activeInterrupt.headline}</span>
+          {activeInterrupt && (
+            <div className="interrupt-ribbon" role="status">
+              <Radio size={13} />
+              <div>
+                <strong>{activeInterrupt.badge}</strong>
+                <span>{activeInterrupt.headline}</span>
+              </div>
             </div>
-          </div>
-        )}
-
-        {micCutSecondsLeft > 0 && (
-          <div className="mic-cut-overlay" role="alert">
-            <Camera size={22} />
-            <strong>GRAVANDO CORTE PRO REELS — MIC SILENCIADO</strong>
-            <span>Ring Light liberando em {micCutSecondsLeft}s...</span>
-          </div>
-        )}
-
-        <div className="avatar-caption">
-          <div>
-            <p className="avatar-name">
-              Prof.ª Clarice &ldquo;Clá&rdquo; Alencar
-            </p>
-            <p className="avatar-role">
-              Frente da Família &amp; Costumes · PFM/SC
-            </p>
-          </div>
-          <div className="eq-bars" aria-hidden="true">
-            {eqHeights.map((h, idx) => (
-              <span
-                key={idx}
-                className="eq-bar"
-                style={{
-                  height: `${h}px`,
-                  background:
-                    activeMood === "crise" || activeMood === "reels"
-                      ? "var(--rose)"
-                      : activeMood === "livro"
-                      ? "var(--emerald)"
-                      : activeMood === "celular"
-                      ? "var(--amber)"
-                      : "var(--gold)",
-                }}
-              />
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <div className="stage-controls">
-        <div className="primary-cta-row">
-          {status !== "live" ? (
-            <button
-              type="button"
-              className="btn-voice"
-              disabled={status === "connecting"}
-              onClick={onStartLive}
-            >
-              <Mic size={18} />
-              {status === "connecting"
-                ? "Ligando o ring light..."
-                : "Falar ao vivo com a Clarice"}
-            </button>
-          ) : (
-            <>
-              <button
-                type="button"
-                className={`btn-secondary ${isMuted ? "is-muted" : ""}`}
-                disabled={isForceMuted}
-                onClick={onToggleMute}
-                aria-label={
-                  isMuted ? "Ativar microfone" : "Silenciar microfone"
-                }
-              >
-                {isMuted ? <MicOff size={17} /> : <Mic size={17} />}
-                {isForceMuted ? "No Corte" : isMuted ? "Mutado" : "Mic"}
-              </button>
-              <button
-                type="button"
-                className="btn-voice is-danger"
-                onClick={onStopLive}
-              >
-                <PhoneOff size={17} />
-                Encerrar voz
-              </button>
-            </>
           )}
-        </div>
 
-        {status === "live" && (
-          <div className="live-footer-meta">
-            <div className="mic-meter-row">
-              <span>{isForceMuted ? "REC" : isMuted ? "MUDO" : "MIC"}</span>
-              <div className="mic-meter-track">
-                <div
-                  className="mic-meter-fill"
+          {micCutSecondsLeft > 0 && (
+            <div className="mic-cut-overlay" role="alert">
+              <Camera size={22} />
+              <strong>GRAVANDO CORTE PRO REELS — MIC SILENCIADO</strong>
+              <span>Ring Light liberando em {micCutSecondsLeft}s...</span>
+            </div>
+          )}
+
+          <div className="avatar-caption">
+            <div>
+              <p className="avatar-name">
+                Prof.ª Clarice &ldquo;Clá&rdquo; Alencar
+              </p>
+              <p className="avatar-role">
+                Frente da Família &amp; Costumes · PFM/SC
+              </p>
+            </div>
+            <div className="eq-bars" aria-hidden="true">
+              {eqHeights.map((h, idx) => (
+                <span
+                  key={idx}
+                  className="eq-bar"
                   style={{
-                    width: `${
-                      isMuted ? 0 : Math.min(100, Math.round(inputLevel * 100))
-                    }%`,
+                    height: `${h}px`,
+                    background:
+                      activeMood === "crise" || activeMood === "reels"
+                        ? "var(--rose)"
+                        : activeMood === "livro"
+                        ? "var(--emerald)"
+                        : activeMood === "celular"
+                        ? "var(--amber)"
+                        : "var(--gold)",
                   }}
                 />
-              </div>
-              <span className="timer-inline">
-                {formatTimer(remainingSeconds)}
-              </span>
-              <button
-                type="button"
-                className="timer-extend"
-                onClick={onExtendSession}
-              >
-                +3m
-              </button>
-            </div>
-          </div>
-        )}
-
-        {documents.length > 0 && (
-          <div className="desk-folder">
-            <span className="desk-folder-label">
-              Pasta do Estúdio ({documents.length})
-            </span>
-            <div className="desk-folder-list">
-              {documents.map((doc) => (
-                <button
-                  key={doc.id}
-                  type="button"
-                  className="doc-pill-btn"
-                  onClick={() => onInspectDocument(doc)}
-                >
-                  <FileText size={13} />
-                  {doc.action.type === "gravar_corte_reels"
-                    ? `Reels · ${doc.action.viewsEstimadas}`
-                    : doc.action.type === "protocolar_denuncia_escola"
-                    ? `Ofício · ${doc.action.protocolo}`
-                    : `Hotmart · ${doc.action.cupom}`}
-                </button>
               ))}
             </div>
           </div>
-        )}
+        </div>
 
-        {error && <div className="error-banner">{error}</div>}
+        <div className="stage-controls">
+          <div className="mobile-stage-meta">
+            <div className="mobile-stage-id">
+              <strong>Dep. Clarice Alencar</strong>
+              <span>{MOOD_LABELS[activeMood]}</span>
+            </div>
+          </div>
+
+          <div className="primary-cta-row">
+            {status !== "live" ? (
+              <button
+                type="button"
+                className="btn-voice"
+                disabled={status === "connecting"}
+                onClick={onStartLive}
+              >
+                <Mic size={16} />
+                <span className="cta-desktop-label">
+                  {status === "connecting"
+                    ? "Ligando o ring light..."
+                    : "Falar ao vivo com a Clarice"}
+                </span>
+                <span className="cta-mobile-label">
+                  {status === "connecting" ? "Conectando..." : "Voz ao vivo"}
+                </span>
+              </button>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  className={`btn-secondary ${isMuted ? "is-muted" : ""}`}
+                  disabled={isForceMuted}
+                  onClick={onToggleMute}
+                  aria-label={
+                    isMuted ? "Ativar microfone" : "Silenciar microfone"
+                  }
+                >
+                  {isMuted ? <MicOff size={16} /> : <Mic size={16} />}
+                  {isForceMuted ? "No Corte" : isMuted ? "Mutado" : "Mic"}
+                </button>
+                <button
+                  type="button"
+                  className="btn-voice is-danger"
+                  onClick={onStopLive}
+                >
+                  <PhoneOff size={16} />
+                  Encerrar
+                </button>
+              </>
+            )}
+          </div>
+
+          {status === "live" && (
+            <div className="live-footer-meta">
+              <div className="mic-meter-row">
+                <span>{isForceMuted ? "REC" : isMuted ? "MUDO" : "MIC"}</span>
+                <div className="mic-meter-track">
+                  <div
+                    className="mic-meter-fill"
+                    style={{
+                      width: `${
+                        isMuted ? 0 : Math.min(100, Math.round(inputLevel * 100))
+                      }%`,
+                    }}
+                  />
+                </div>
+                <span className="timer-inline">
+                  {formatTimer(remainingSeconds)}
+                </span>
+                <button
+                  type="button"
+                  className="timer-extend"
+                  onClick={onExtendSession}
+                >
+                  +3m
+                </button>
+              </div>
+            </div>
+          )}
+
+          {documents.length > 0 && (
+            <div className="desk-folder">
+              <span className="desk-folder-label">
+                Pasta do Estúdio ({documents.length})
+              </span>
+              <div className="desk-folder-list">
+                {documents.map((doc) => (
+                  <button
+                    key={doc.id}
+                    type="button"
+                    className="doc-pill-btn"
+                    onClick={() => onInspectDocument(doc)}
+                  >
+                    <FileText size={13} />
+                    {doc.action.type === "gravar_corte_reels"
+                      ? `Reels · ${doc.action.viewsEstimadas}`
+                      : doc.action.type === "protocolar_denuncia_escola"
+                      ? `Ofício · ${doc.action.protocolo}`
+                      : `Hotmart · ${doc.action.cupom}`}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {error && <div className="error-banner">{error}</div>}
+        </div>
       </div>
     </aside>
   );

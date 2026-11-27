@@ -80,9 +80,52 @@ describe("Cabinet State Engine & Scenarios (Gabinete da Clarice 2.0)", () => {
     );
   });
 
-  it("triggers Paradoxo Tradwife victory at 85%+ in paradoxo_tradwife scenario", () => {
+  it("does NOT end mentoria_hotmart prematurely on Turn 1 with a small R$ 45k offer", () => {
+    const start = createInitialLedger("mentoria_hotmart");
+    const patch = sanitizeDirectorPatch({
+      mood: "livro",
+      meterDelta: { cortesVirais: 8, faturamentoHotmartK: 0, compostura: 4 },
+      action: {
+        type: "lancar_oferta_hotmart",
+        nomeProduto: "Mentoria Esposa de Alto Valor",
+        valorFaturadoK: 45,
+        parcela: "12x de R$ 197,00",
+        cupom: "FAMILIA10",
+        modulosBonus: "Bônus da babá.",
+      },
+      usedTropes: ["hotmart"],
+      newFacts: [],
+      suggestedMoves: [],
+    });
+
+    const result = applyDirectorPatch(
+      start,
+      patch,
+      "Usa o cupom FAMILIA10 na bio!",
+      "19:11"
+    );
+    expect(result.nextLedger.meters.faturamentoHotmartK).toBe(90);
+    expect(result.justEnded).toBe(false);
+    expect(result.nextLedger.endedReason).toBeUndefined();
+  });
+
+  it("triggers Paradoxo Tradwife victory at 85%+ and prioritizes Desmascarador even if a denúncia occurred earlier", () => {
     const start = createInitialLedger("paradoxo_tradwife");
     start.meters.paradoxoTradwife = 68;
+    start.documents = [
+      {
+        id: "doc-prior",
+        createdAt: "19:08",
+        turn: 1,
+        action: {
+          type: "protocolar_denuncia_escola",
+          protocolo: "ESD-1234/2026",
+          instituicao: "Colégio Estadual",
+          acusacaoAbsurda: "Regra de três suspeita",
+          penalidadeProposta: "Etiqueta doméstica",
+        },
+      },
+    ];
     const patch = sanitizeDirectorPatch({
       mood: "celular",
       meterDelta: { paradoxoTradwife: 20, compostura: -10 },
