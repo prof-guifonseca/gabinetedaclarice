@@ -116,6 +116,8 @@ export function AvatarStage({
               key={key}
               src={AVATAR_SOURCES[key]}
               alt='Dep. Prof.ª Clarice "Clá" Alencar'
+              fetchPriority={key === "neutro" ? "high" : "low"}
+              decoding={key === "neutro" ? "sync" : "async"}
               className={`avatar-img ${activeMood === key ? "is-active" : ""}`}
             />
           ))}
