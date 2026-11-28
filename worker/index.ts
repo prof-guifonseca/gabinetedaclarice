@@ -1,5 +1,5 @@
-import { timingSafeEqual } from "node:crypto";
 import { Hono } from "hono";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
 import {
   DIRECTOR_RESPONSE_SCHEMA,
   DEFAULT_LIVE_VOICE,
@@ -7,10 +7,12 @@ import {
   buildLiveInstructions,
   buildTextInstructions,
   inferMoodFromText,
+  sanitizeUntrustedPromptText,
   type RecentTurn,
 } from "../src/shared/persona";
 import {
   clamp,
+  isDocumentAction,
   sanitizeDirectorPatch,
   type DirectorPatch,
   type ScenarioId,
@@ -18,10 +20,17 @@ import {
 } from "../src/shared/gameState";
 import { SCENARIOS, createInitialLedger } from "../src/shared/scenarios";
 
-const app = new Hono<{ Bindings: Env }>();
+const app = new Hono<{
+  Bindings: Env;
+  Variables: { rawBodyText?: string };
+}>();
 
-const PRESET_LIVE_VOICES = new Set(["tempo", "bossa", "stone", "ripple"]);
+const PRESET_LIVE_VOICES = new Set(["tempo", "bossa", "stone", "ripple", "coral"]);
+const FALLBACK_PRESET_VOICE = "tempo";
 const CUSTOM_VOICE_ID_RE = /^voice_[a-zA-Z0-9_-]{8,80}$/;
+const MAX_API_BODY_BYTES = 32 * 1024;
+const MAX_SDP_CHARS = 24_000;
+const RATE_LIMIT_MAX_ENTRIES = 2000;
 
 const rateLimitStore = new Map<string, { count: number; resetAt: number }>();
 
@@ -30,10 +39,7 @@ export function resetRateLimitStore(): void {
 }
 
 function getClientKey(request: Request, bucket: string): string {
-  const ip =
-    request.headers.get("CF-Connecting-IP") ||
-    request.headers.get("X-Forwarded-For")?.split(",")[0]?.trim() ||
-    "local";
+  const ip = request.headers.get("CF-Connecting-IP")?.trim() || "local";
   return `${bucket}:${ip}`;
 }
 
@@ -48,10 +54,18 @@ function checkRateLimit(
   const existing = rateLimitStore.get(key);
 
   if (!existing || now >= existing.resetAt) {
+    if (existing) {
+      rateLimitStore.delete(key);
+    }
     rateLimitStore.set(key, { count: 1, resetAt: now + windowMs });
-    if (rateLimitStore.size > 2000) {
+    if (rateLimitStore.size > RATE_LIMIT_MAX_ENTRIES) {
       for (const [k, v] of rateLimitStore.entries()) {
         if (now >= v.resetAt) rateLimitStore.delete(k);
+      }
+      while (rateLimitStore.size > RATE_LIMIT_MAX_ENTRIES) {
+        const oldestKey = rateLimitStore.keys().next().value;
+        if (oldestKey === undefined) break;
+        rateLimitStore.delete(oldestKey);
       }
     }
     return { allowed: true, retryAfterSec: 0 };
@@ -67,6 +81,123 @@ function checkRateLimit(
   existing.count += 1;
   return { allowed: true, retryAfterSec: 0 };
 }
+
+async function readBodyTextWithLimit(
+  req: Request,
+  maxBytes: number
+): Promise<{ exceeded: true } | { exceeded: false; text: string }> {
+  const contentLengthRaw = req.headers.get("Content-Length");
+  if (contentLengthRaw !== null) {
+    const contentLength = Number(contentLengthRaw);
+    if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+      return { exceeded: true };
+    }
+  }
+  const body = req.body;
+  if (!body) {
+    return { exceeded: false, text: "" };
+  }
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => {});
+        return { exceeded: true };
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return { exceeded: false, text: new TextDecoder().decode(merged) };
+}
+
+function parseJsonBody<T>(rawText: string | undefined): T {
+  return JSON.parse(rawText ?? "") as T;
+}
+
+function mapUpstreamStatus(status: number): ContentfulStatusCode {
+  if (status === 429) return 429;
+  if (status === 408 || status === 504) return 504;
+  if (status === 503) return 503;
+  return 502;
+}
+
+// Global security headers + API Cache-Control middleware
+app.use("*", async (c, next) => {
+  await next();
+  const headers = new Headers(c.res.headers);
+  headers.set("X-Content-Type-Options", "nosniff");
+  headers.set("X-Frame-Options", "DENY");
+  headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
+  headers.set(
+    "Permissions-Policy",
+    "camera=(), geolocation=(), microphone=(self)"
+  );
+  if (c.req.path.startsWith("/api/")) {
+    const ct = headers.get("Content-Type") || "";
+    headers.set(
+      "Cache-Control",
+      ct.includes("text/event-stream") ? "no-store, no-transform" : "no-store"
+    );
+  }
+  c.res = new Response(c.res.body, {
+    status: c.res.status,
+    statusText: c.res.statusText,
+    headers,
+  });
+});
+
+// API POST origin, Content-Type and 32KB body-size hardening
+app.use("/api/*", async (c, next) => {
+  if (c.req.method === "POST") {
+    const origin = c.req.header("Origin");
+    if (origin) {
+      let expectedOrigin = "";
+      try {
+        expectedOrigin = new URL(c.req.url).origin;
+      } catch {
+        expectedOrigin = "";
+      }
+      if (!expectedOrigin || origin !== expectedOrigin) {
+        return c.json({ error: "Origem não autorizada." }, 403);
+      }
+    }
+
+    const contentType = c.req.header("Content-Type") || "";
+    if (!contentType.toLowerCase().startsWith("application/json")) {
+      return c.json(
+        { error: "Content-Type deve começar com application/json." },
+        415
+      );
+    }
+
+    const bodyResult = await readBodyTextWithLimit(
+      c.req.raw,
+      MAX_API_BODY_BYTES
+    );
+    if (bodyResult.exceeded) {
+      return c.json(
+        { error: "Payload excede o limite máximo de 32KB." },
+        413
+      );
+    }
+    c.set("rawBodyText", bodyResult.text);
+  }
+  await next();
+});
 
 function isValidLiveVoice(value: unknown): value is string {
   return (
@@ -92,26 +223,47 @@ async function sha256Bytes(input: string): Promise<Uint8Array> {
   return new Uint8Array(digest);
 }
 
+function constantTimeEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  const subtle = crypto.subtle as SubtleCrypto & {
+    timingSafeEqual?: (a: ArrayBufferView, b: ArrayBufferView) => boolean;
+  };
+  if (typeof subtle.timingSafeEqual === "function") {
+    return subtle.timingSafeEqual(a, b);
+  }
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) {
+    diff |= a[i] ^ b[i];
+  }
+  return diff === 0;
+}
+
 async function verifyAccessCode(
   provided: unknown,
   expected: string | undefined
 ): Promise<boolean> {
-  if (!expected || expected.trim() === "") {
+  const normalizedExpected = expected?.trim() ?? "";
+  if (normalizedExpected === "") {
     return true;
   }
-  if (typeof provided !== "string" || provided.length === 0) {
+  if (typeof provided !== "string") {
+    return false;
+  }
+  const normalizedProvided = provided.trim();
+  if (normalizedProvided.length === 0) {
     return false;
   }
   const [a, b] = await Promise.all([
-    sha256Bytes(provided),
-    sha256Bytes(expected),
+    sha256Bytes(normalizedProvided),
+    sha256Bytes(normalizedExpected),
   ]);
-  return timingSafeEqual(a, b);
+  return constantTimeEqual(a, b);
 }
 
 function sanitizeHistory(input: unknown, limit = 16): RecentTurn[] {
   if (!Array.isArray(input)) return [];
   return input
+    .slice(-(limit * 2))
     .filter(
       (item): item is RecentTurn =>
         typeof item === "object" &&
@@ -143,6 +295,49 @@ function sanitizeLedger(input: unknown): SessionLedger | undefined {
 
   const actNum = Number(obj.act);
   const act = actNum === 2 || actNum === 3 ? actNum : 1;
+
+  const facts = Array.isArray(obj.facts)
+    ? obj.facts
+        .slice(-30)
+        .filter((s): s is string => typeof s === "string" && s.trim().length > 0)
+        .slice(-10)
+        .map((s) => sanitizeUntrustedPromptText(s, 140))
+        .filter(Boolean)
+    : [];
+
+  const recentTropes = Array.isArray(obj.recentTropes)
+    ? obj.recentTropes
+        .slice(-24)
+        .filter((s): s is string => typeof s === "string" && s.trim().length > 0)
+        .slice(-8)
+        .map((s) => sanitizeUntrustedPromptText(s, 48))
+        .filter(Boolean)
+    : [];
+
+  const documents: SessionLedger["documents"] = Array.isArray(obj.documents)
+    ? obj.documents.slice(-12).flatMap((doc, idx) => {
+        if (typeof doc !== "object" || doc === null) return [];
+        const rec = doc as Record<string, unknown>;
+        const sanitizedAction = sanitizeDirectorPatch({
+          action: rec.action,
+        }).action;
+        if (!isDocumentAction(sanitizedAction)) return [];
+        return [
+          {
+            id:
+              typeof rec.id === "string" && rec.id.trim().length > 0
+                ? sanitizeUntrustedPromptText(rec.id, 48)
+                : `doc-${idx}`,
+            createdAt:
+              typeof rec.createdAt === "string" && rec.createdAt.trim().length > 0
+                ? sanitizeUntrustedPromptText(rec.createdAt, 24)
+                : "",
+            turn: clamp(Math.round(Number(rec.turn) || 1), 1, 200),
+            action: sanitizedAction,
+          },
+        ];
+      })
+    : [];
 
   return {
     ...base,
@@ -186,21 +381,9 @@ function sanitizeLedger(input: unknown): SessionLedger | undefined {
         100
       ),
     },
-    facts: Array.isArray(obj.facts)
-      ? obj.facts
-          .filter((s): s is string => typeof s === "string" && s.trim().length > 0)
-          .slice(-10)
-          .map((s) => s.slice(0, 140))
-      : [],
-    recentTropes: Array.isArray(obj.recentTropes)
-      ? obj.recentTropes
-          .filter((s): s is string => typeof s === "string" && s.trim().length > 0)
-          .slice(-8)
-          .map((s) => s.slice(0, 48))
-      : [],
-    documents: Array.isArray(obj.documents)
-      ? (obj.documents.slice(-12) as SessionLedger["documents"])
-      : [],
+    facts,
+    recentTropes,
+    documents,
   };
 }
 
@@ -250,15 +433,22 @@ export function buildFallbackDirectorPatch(
   };
   let action: DirectorPatch["action"] = { type: "none" };
 
-  if (/(silêncio|fica quiet|ring light|meu corte de 60|corta esse áudio)/.test(replyLower)) {
+  if (
+    /(silêncio|fica quiet|ring light|meu corte de 60|corta esse áudio)/.test(
+      replyLower
+    )
+  ) {
     meterDelta.compostura = -14;
     meterDelta.cortesVirais = 10;
     action = {
       type: "ligar_ring_light_silenciar",
       segundos: 4,
-      motivo: "Silêncio agora que o Enzo ligou o Ring Light pro corte de 60 segundos!",
+      motivo:
+        "Silêncio agora que o Enzo ligou o Ring Light pro corte de 60 segundos!",
     };
-  } else if (/(denúncia|canal escola sem|notific|gravar em 4k|doutrina)/.test(replyLower)) {
+  } else if (
+    /(denúncia|canal escola sem|notific|gravar em 4k|doutrina)/.test(replyLower)
+  ) {
     meterDelta.cortesVirais = 10;
     meterDelta.compostura = -6;
     action = {
@@ -296,21 +486,30 @@ export function buildFallbackDirectorPatch(
     meterDelta.compostura = -8;
     action = {
       type: "bater_livro_mesa",
-      motivo: "Leia a página 42 do meu best-seller antes de repetir cartilha pronta!",
+      motivo:
+        "Leia a página 42 do meu best-seller antes de repetir cartilha pronta!",
     };
   }
 
-  if (/(babá|marido|fabrício|salário|brasília|voto feminino|fogão|bistrô)/.test(combined)) {
+  if (
+    /(babá|marido|fabrício|salário|brasília|voto feminino|fogão|bistrô)/.test(
+      combined
+    )
+  ) {
     meterDelta.paradoxoTradwife = (meterDelta.paradoxoTradwife ?? 0) + 14;
     meterDelta.compostura = (meterDelta.compostura ?? 0) - 8;
   }
 
   const usedTropes: string[] = [];
   if (/frankfurt|marxismo/.test(combined)) usedTropes.push("escola de frankfurt");
-  if (/babá|fabrício|marido/.test(combined)) usedTropes.push("3 babas e marido sc");
-  if (/hotmart|mentoria|197|cupom/.test(combined)) usedTropes.push("mentoria hotmart");
+  if (/babá|fabrício|marido/.test(combined))
+    usedTropes.push("3 babas e marido sc");
+  if (/hotmart|mentoria|197|cupom/.test(combined))
+    usedTropes.push("mentoria hotmart");
   if (/bento|matcha/.test(combined)) usedTropes.push("prof bento");
   if (/vavá|rodeio/.test(combined)) usedTropes.push("dr vava");
+  if (/jeremias|cabo|hilux|ursal|caveira/.test(combined))
+    usedTropes.push("cabo jeremias");
   if (/burnout|gato/.test(combined)) usedTropes.push("burnout e gatos");
   if (/denúncia|4k/.test(combined)) usedTropes.push("canal denuncias");
 
@@ -346,14 +545,17 @@ app.post("/api/auth/verify", async (c) => {
   if (!rl.allowed) {
     c.header("Retry-After", String(rl.retryAfterSec));
     return c.json(
-      { error: "Muitas tentativas na portaria do Gabinete 222. Aguarde um pouco." },
+      {
+        error:
+          "Muitas tentativas na portaria do Gabinete 222. Aguarde um pouco.",
+      },
       429
     );
   }
 
   let body: { accessCode?: string };
   try {
-    body = await c.req.json();
+    body = parseJsonBody<{ accessCode?: string }>(c.get("rawBodyText"));
   } catch {
     return c.json({ error: "Payload JSON inválido." }, 400);
   }
@@ -367,6 +569,7 @@ app.post("/api/auth/verify", async (c) => {
 });
 
 app.post("/api/live/session", async (c) => {
+  const startedAt = Date.now();
   const rl = checkRateLimit(c.req.raw, "live", 10, 5 * 60_000);
   if (!rl.allowed) {
     c.header("Retry-After", String(rl.retryAfterSec));
@@ -388,7 +591,7 @@ app.post("/api/live/session", async (c) => {
   };
 
   try {
-    body = await c.req.json();
+    body = parseJsonBody(c.get("rawBodyText"));
   } catch {
     return c.json({ error: "Payload JSON inválido." }, 400);
   }
@@ -404,18 +607,25 @@ app.post("/api/live/session", async (c) => {
     return c.json({ error: "Senha de gabinete inválida." }, 401);
   }
 
-  if (typeof body.sdp !== "string" || !body.sdp.includes("v=0")) {
-    return c.json({ error: "SDP offer WebRTC ausente ou inválido." }, 400);
+  if (
+    typeof body.sdp !== "string" ||
+    !body.sdp.includes("v=0") ||
+    body.sdp.length > MAX_SDP_CHARS
+  ) {
+    return c.json(
+      { error: "SDP offer WebRTC ausente, inválido ou grande demais." },
+      400
+    );
   }
 
   if (!c.env.OPENAI_API_KEY) {
     console.error(
       JSON.stringify({ event: "missing_openai_key", path: "/api/live/session" })
     );
-    return c.json({ error: "OPENAI_API_KEY não configurada no servidor." }, 500);
+    return c.json({ error: "Serviço de voz indisponível no servidor." }, 500);
   }
 
-  const voice = parseLiveVoice(
+  const requestedVoice = parseLiveVoice(
     body.voice,
     c.env.DEFAULT_VOICE || DEFAULT_LIVE_VOICE
   );
@@ -424,13 +634,16 @@ app.post("/api/live/session", async (c) => {
   const ledger = sanitizeLedger(body.ledger);
   const instructions = buildLiveInstructions(recentHistory, ledger);
 
-  const attemptSession = async (includeStandby: boolean) => {
+  const attemptSession = async (
+    includeStandby: boolean,
+    activeVoice: string
+  ) => {
     const sessionConfig: Record<string, unknown> = {
       model,
       instructions,
       audio: {
         output: {
-          voice: formatLiveVoiceParam(voice),
+          voice: formatLiveVoiceParam(activeVoice),
         },
       },
     };
@@ -452,30 +665,70 @@ app.post("/api/live/session", async (c) => {
           sdp: body.sdp,
         },
       }),
+      signal: AbortSignal.timeout(20_000),
     });
   };
 
   try {
-    let upstream = await attemptSession(true);
-    let rawText = await upstream.text();
+    let effectiveVoice = requestedVoice;
     let standbyEnabled = true;
+    let upstream = await attemptSession(true, effectiveVoice);
+    let rawText = await upstream.text();
 
     if (!upstream.ok && (upstream.status === 400 || upstream.status === 422)) {
+      console.warn(
+        JSON.stringify({
+          event: "live_session_standby_fallback",
+          status: upstream.status,
+          voice: effectiveVoice,
+          detail: rawText.slice(0, 240),
+        })
+      );
       standbyEnabled = false;
-      upstream = await attemptSession(false);
+      upstream = await attemptSession(false, effectiveVoice);
+      rawText = await upstream.text();
+    }
+
+    if (
+      !upstream.ok &&
+      (upstream.status === 400 || upstream.status === 422) &&
+      CUSTOM_VOICE_ID_RE.test(effectiveVoice)
+    ) {
+      console.warn(
+        JSON.stringify({
+          event: "live_session_voice_fallback",
+          status: upstream.status,
+          fromVoice: effectiveVoice,
+          toVoice: FALLBACK_PRESET_VOICE,
+          detail: rawText.slice(0, 240),
+        })
+      );
+      effectiveVoice = FALLBACK_PRESET_VOICE;
+      upstream = await attemptSession(false, effectiveVoice);
       rawText = await upstream.text();
     }
 
     if (!upstream.ok) {
+      const clientStatus = mapUpstreamStatus(upstream.status);
+      console.error(
+        JSON.stringify({
+          event: "live_session_upstream_error",
+          upstreamStatus: upstream.status,
+          clientStatus,
+          model,
+          voice: effectiveVoice,
+          durationMs: Date.now() - startedAt,
+          detail: rawText.slice(0, 400),
+        })
+      );
       return c.json(
         {
-          error: "Falha ao inicializar conversa por voz com a OpenAI.",
-          status: upstream.status,
-          detail: rawText.slice(0, 400),
+          error:
+            clientStatus === 429
+              ? "Muitas chamadas ao vivo simultâneas na linha da OpenAI. Aguarde alguns segundos e tente novamente."
+              : "Falha ao inicializar a conversa por voz no Gabinete 222. Tente novamente em instantes.",
         },
-        upstream.status >= 400 && upstream.status < 600
-          ? (upstream.status as 400)
-          : 502
+        clientStatus
       );
     }
 
@@ -484,12 +737,23 @@ app.post("/api/live/session", async (c) => {
       transport?: { type?: string; sdp?: string };
     };
 
+    console.info(
+      JSON.stringify({
+        event: "live_session_started",
+        model,
+        voice: effectiveVoice,
+        standbyEnabled,
+        scenarioId: ledger?.scenarioId ?? "livre",
+        durationMs: Date.now() - startedAt,
+      })
+    );
+
     return c.json(
       {
         session: parsed.session,
         transport: parsed.transport,
         model,
-        voice,
+        voice: effectiveVoice,
         standbyEnabled,
       },
       201
@@ -498,10 +762,15 @@ app.post("/api/live/session", async (c) => {
     console.error(
       JSON.stringify({
         event: "live_session_exception",
+        model,
+        durationMs: Date.now() - startedAt,
         error: err instanceof Error ? err.message : String(err),
       })
     );
-    return c.json({ error: "Erro interno ao negociar conexão de voz." }, 502);
+    return c.json(
+      { error: "Erro interno ao negociar a conexão de voz no Gabinete 222." },
+      502
+    );
   }
 });
 
@@ -527,7 +796,7 @@ app.post("/api/chat", async (c) => {
   };
 
   try {
-    body = await c.req.json();
+    body = parseJsonBody(c.get("rawBodyText"));
   } catch {
     return c.json({ error: "Payload JSON inválido." }, 400);
   }
@@ -542,7 +811,10 @@ app.post("/api/chat", async (c) => {
   }
 
   if (!c.env.OPENAI_API_KEY) {
-    return c.json({ error: "OPENAI_API_KEY não configurada no servidor." }, 500);
+    console.error(
+      JSON.stringify({ event: "missing_openai_key", path: "/api/chat" })
+    );
+    return c.json({ error: "Serviço de chat indisponível no servidor." }, 500);
   }
 
   const textModel = c.env.OPENAI_TEXT_MODEL || "gpt-6-luna";
@@ -555,6 +827,21 @@ app.post("/api/chat", async (c) => {
     ...history.map((m) => ({ role: m.role, content: m.content })),
     { role: "user", content: message },
   ];
+
+  const upstreamAbort = new AbortController();
+  const reqSignal = c.req.raw.signal;
+  const onClientAbort = () => upstreamAbort.abort();
+  if (reqSignal.aborted) {
+    upstreamAbort.abort();
+  } else {
+    reqSignal.addEventListener("abort", onClientAbort, { once: true });
+  }
+  const timeoutHandle = setTimeout(() => upstreamAbort.abort(), 30_000);
+
+  const cleanupUpstreamAbort = () => {
+    clearTimeout(timeoutHandle);
+    reqSignal.removeEventListener("abort", onClientAbort);
+  };
 
   try {
     const upstream = await fetch("https://api.openai.com/v1/responses", {
@@ -570,16 +857,30 @@ app.post("/api/chat", async (c) => {
         max_output_tokens: 700,
         ...(wantsStream ? { stream: true } : {}),
       }),
+      signal: upstreamAbort.signal,
     });
 
     if (!upstream.ok) {
-      const errText = await upstream.text();
+      cleanupUpstreamAbort();
+      const errText = await upstream.text().catch(() => "");
+      const clientStatus = mapUpstreamStatus(upstream.status);
+      console.error(
+        JSON.stringify({
+          event: "text_chat_upstream_error",
+          upstreamStatus: upstream.status,
+          clientStatus,
+          model: textModel,
+          detail: errText.slice(0, 300),
+        })
+      );
       return c.json(
         {
-          error: "Falha ao conversar com a Deputada Clarice.",
-          detail: errText.slice(0, 300),
+          error:
+            clientStatus === 429
+              ? "O Gabinete 222 está lotado no momento. Aguarde alguns segundos e tente novamente."
+              : "Falha ao conversar com a Deputada Clarice agora. Tente novamente.",
         },
-        502
+        clientStatus
       );
     }
 
@@ -587,6 +888,8 @@ app.post("/api/chat", async (c) => {
       const encoder = new TextEncoder();
       const decoder = new TextDecoder();
       const reader = upstream.body.getReader();
+      let closed = false;
+      let hadError = false;
 
       const stream = new ReadableStream({
         async start(controller) {
@@ -594,59 +897,129 @@ app.post("/api/chat", async (c) => {
           let fullText = "";
 
           const sendEvent = (event: string, data: unknown) => {
-            controller.enqueue(
-              encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
-            );
+            if (closed) return;
+            try {
+              controller.enqueue(
+                encoder.encode(
+                  `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`
+                )
+              );
+            } catch {
+              closed = true;
+            }
+          };
+
+          const processLine = (rawLine: string) => {
+            const line = rawLine.trim();
+            if (!line.startsWith("data:")) return;
+            const dataStr = line.slice(5).trim();
+            if (!dataStr || dataStr === "[DONE]") return;
+
+            try {
+              const evt = JSON.parse(dataStr) as Record<string, unknown>;
+              const evtType = String(evt.type ?? "");
+              if (
+                evtType === "response.output_text.delta" &&
+                typeof evt.delta === "string"
+              ) {
+                fullText += evt.delta;
+                sendEvent("delta", { delta: evt.delta });
+              } else if (
+                evtType === "response.output_text.done" &&
+                typeof evt.text === "string" &&
+                !fullText
+              ) {
+                fullText = evt.text;
+                sendEvent("delta", { delta: evt.text });
+              } else if (evtType === "response.failed" || evtType === "error") {
+                hadError = true;
+                console.error(
+                  JSON.stringify({
+                    event: "text_chat_stream_upstream_error",
+                    evtType,
+                    model: textModel,
+                    detail: JSON.stringify(evt).slice(0, 300),
+                  })
+                );
+                sendEvent("error", {
+                  error:
+                    "O estúdio do Gabinete 222 teve uma oscilação na resposta. Tente novamente.",
+                });
+              }
+            } catch {
+              // ignore non-JSON SSE comments
+            }
           };
 
           try {
-            while (true) {
+            while (!closed && !hadError) {
               const { done, value } = await reader.read();
               if (done) break;
-              buffer += decoder.decode(value, { stream: true });
+              buffer = (buffer + decoder.decode(value, { stream: true }))
+                .replace(/\r\n/g, "\n")
+                .replace(/\r/g, "\n");
 
               const lines = buffer.split("\n");
               buffer = lines.pop() ?? "";
 
               for (const rawLine of lines) {
-                const line = rawLine.trim();
-                if (!line.startsWith("data:")) continue;
-                const dataStr = line.slice(5).trim();
-                if (!dataStr || dataStr === "[DONE]") continue;
+                processLine(rawLine);
+                if (hadError || closed) break;
+              }
+            }
 
-                try {
-                  const evt = JSON.parse(dataStr) as Record<string, unknown>;
-                  const evtType = String(evt.type ?? "");
-                  if (
-                    evtType === "response.output_text.delta" &&
-                    typeof evt.delta === "string"
-                  ) {
-                    fullText += evt.delta;
-                    sendEvent("delta", { delta: evt.delta });
-                  } else if (
-                    evtType === "response.output_text.done" &&
-                    typeof evt.text === "string" &&
-                    !fullText
-                  ) {
-                    fullText = evt.text;
-                    sendEvent("delta", { delta: evt.text });
-                  }
-                } catch {
-                  // ignore non-JSON SSE comments
+            if (!closed && !hadError) {
+              const tail = decoder.decode();
+              if (tail) {
+                buffer = (buffer + tail)
+                  .replace(/\r\n/g, "\n")
+                  .replace(/\r/g, "\n");
+              }
+              if (buffer.trim()) {
+                for (const rawLine of buffer.split("\n")) {
+                  processLine(rawLine);
+                  if (hadError || closed) break;
                 }
               }
             }
           } catch (err) {
-            sendEvent("error", {
-              error: err instanceof Error ? err.message : "Erro de streaming",
-            });
+            if (!closed) {
+              hadError = true;
+              console.error(
+                JSON.stringify({
+                  event: "text_chat_stream_exception",
+                  model: textModel,
+                  error: err instanceof Error ? err.message : String(err),
+                })
+              );
+              sendEvent("error", {
+                error:
+                  "A transmissão do Gabinete 222 foi interrompida. Tente novamente.",
+              });
+            }
           } finally {
-            const finalReply =
-              fullText.trim() ||
-              "Ai, meu bem, deu uma piscada aqui no ring light do gabinete. Pode repetir o que você falou?";
-            sendEvent("done", { reply: finalReply, model: textModel });
-            controller.close();
+            cleanupUpstreamAbort();
+            if (!hadError && !closed) {
+              const finalReply =
+                fullText.trim() ||
+                "Ai, meu bem, deu uma piscada aqui no ring light do gabinete. Pode repetir o que você falou?";
+              sendEvent("done", { reply: finalReply, model: textModel });
+            }
+            if (!closed) {
+              closed = true;
+              try {
+                controller.close();
+              } catch {
+                // ignore already closed
+              }
+            }
           }
+        },
+        async cancel() {
+          closed = true;
+          cleanupUpstreamAbort();
+          upstreamAbort.abort();
+          await reader.cancel().catch(() => {});
         },
       });
 
@@ -654,13 +1027,14 @@ app.post("/api/chat", async (c) => {
         status: 200,
         headers: {
           "Content-Type": "text/event-stream; charset=utf-8",
-          "Cache-Control": "no-cache, no-transform",
+          "Cache-Control": "no-store, no-transform",
           Connection: "keep-alive",
         },
       });
     }
 
     const raw = await upstream.text();
+    cleanupUpstreamAbort();
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     const reply =
       extractResponseText(parsed) ||
@@ -668,13 +1042,18 @@ app.post("/api/chat", async (c) => {
 
     return c.json({ reply, model: textModel });
   } catch (err) {
+    cleanupUpstreamAbort();
     console.error(
       JSON.stringify({
         event: "text_chat_exception",
+        model: textModel,
         error: err instanceof Error ? err.message : String(err),
       })
     );
-    return c.json({ error: "Erro interno ao conversar com a Deputada." }, 502);
+    return c.json(
+      { error: "Erro interno ao conversar com a Deputada." },
+      502
+    );
   }
 });
 
@@ -693,7 +1072,7 @@ app.post("/api/director", async (c) => {
   };
 
   try {
-    body = await c.req.json();
+    body = parseJsonBody(c.get("rawBodyText"));
   } catch {
     return c.json({ error: "Payload JSON inválido." }, 400);
   }
@@ -704,7 +1083,9 @@ app.post("/api/director", async (c) => {
   }
 
   const userMessage =
-    typeof body.userMessage === "string" ? body.userMessage.trim().slice(0, 800) : "";
+    typeof body.userMessage === "string"
+      ? body.userMessage.trim().slice(0, 800)
+      : "";
   const assistantReply =
     typeof body.assistantReply === "string"
       ? body.assistantReply.trim().slice(0, 1200)
@@ -724,7 +1105,8 @@ app.post("/api/director", async (c) => {
   }
 
   const model =
-    (c.env as unknown as Record<string, string | undefined>).OPENAI_DIRECTOR_MODEL ||
+    (c.env as unknown as Record<string, string | undefined>)
+      .OPENAI_DIRECTOR_MODEL ||
     c.env.OPENAI_TEXT_MODEL ||
     "gpt-6-luna";
 
@@ -758,20 +1140,23 @@ app.post("/api/director", async (c) => {
         "Content-Type": "application/json",
       },
       body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(20_000),
     });
   };
 
   try {
     let upstream = await callDirector("minimal");
     if (!upstream.ok && (upstream.status === 400 || upstream.status === 422)) {
+      await upstream.body?.cancel().catch(() => {});
       upstream = await callDirector("low");
     }
     if (!upstream.ok && (upstream.status === 400 || upstream.status === 422)) {
+      await upstream.body?.cancel().catch(() => {});
       upstream = await callDirector(undefined);
     }
 
     if (!upstream.ok) {
-      const errDetail = await upstream.text();
+      const errDetail = await upstream.text().catch(() => "");
       console.warn(
         JSON.stringify({
           event: "director_upstream_fallback",
@@ -814,4 +1199,4 @@ export default {
   fetch(request: Request, env: Env, ctx: ExecutionContext) {
     return app.fetch(request, env, ctx);
   },
-};
+} satisfies ExportedHandler<Env>;

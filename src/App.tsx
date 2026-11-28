@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Radio } from "lucide-react";
 import { BroadcastHeader } from "./components/BroadcastHeader";
 import { CabinetMetersBar } from "./components/CabinetMetersBar";
 import { AvatarStage } from "./components/AvatarStage";
@@ -22,6 +23,8 @@ import {
 import type { CabinetDocument, ScenarioId } from "./shared/gameState";
 import { SCENARIOS } from "./shared/scenarios";
 
+const ACCESS_CODE_STORAGE_KEY = "gabinete_clarice_code";
+
 function createOpeningEntries(scenarioId: ScenarioId): ChatEntry[] {
   const scenario = SCENARIOS[scenarioId] ?? SCENARIOS.livre;
   return [
@@ -36,10 +39,21 @@ function createOpeningEntries(scenarioId: ScenarioId): ChatEntry[] {
   ];
 }
 
+function describeDocument(doc: CabinetDocument): string {
+  if (doc.action.type === "gravar_corte_reels") {
+    return `Corte Reels (${doc.action.viewsEstimadas}): ${doc.action.tituloViral}`;
+  }
+  if (doc.action.type === "lancar_oferta_hotmart") {
+    return `Oferta Hotmart (${doc.action.cupom}): ${doc.action.nomeProduto}`;
+  }
+  return `Ofício ${doc.action.protocolo}: ${doc.action.instituicao}`;
+}
+
 export default function App() {
   const game = useCabinetGame();
   const [voice, setVoice] = useState(DEFAULT_LIVE_VOICE);
   const [isSendingText, setIsSendingText] = useState(false);
+  const [streamingReplyId, setStreamingReplyId] = useState<string | null>(null);
   const [entries, setEntries] = useState<ChatEntry[]>(() =>
     createOpeningEntries("livre")
   );
@@ -48,7 +62,7 @@ export default function App() {
   const [requiresAccessCode, setRequiresAccessCode] = useState(false);
   const [accessCode, setAccessCode] = useState<string>(() => {
     try {
-      return window.sessionStorage.getItem("gabinete_clarice_code") || "";
+      return window.sessionStorage.getItem(ACCESS_CODE_STORAGE_KEY) || "";
     } catch {
       return "";
     }
@@ -58,11 +72,25 @@ export default function App() {
   const accessCodeRef = useRef(accessCode);
   accessCodeRef.current = accessCode;
 
+  const chatAbortRef = useRef<AbortController | null>(null);
+  const isSendingRef = useRef(false);
+
   const lastDeltaMetaRef = useRef<{
     role: "user" | "assistant";
     itemKey?: string;
     at: number;
   } | null>(null);
+
+  const clearStoredAccessCode = useCallback(() => {
+    try {
+      window.sessionStorage.removeItem(ACCESS_CODE_STORAGE_KEY);
+    } catch {
+      // ignore storage errors
+    }
+    accessCodeRef.current = "";
+    setAccessCode("");
+    setShowAccessModal(true);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -89,6 +117,13 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    return () => {
+      chatAbortRef.current?.abort();
+      chatAbortRef.current = null;
+    };
+  }, []);
+
   const appendSystemEvent = useCallback((text: string) => {
     setEntries((prev) => [
       ...prev,
@@ -110,7 +145,7 @@ export default function App() {
         role: "system",
         source: "text",
         timestamp: formatNow(),
-        text: "",
+        text: describeDocument(doc),
         document: doc,
       },
     ]);
@@ -221,12 +256,12 @@ export default function App() {
     onSystemEvent: appendSystemEvent,
     onMoodHint: (hint) => game.setTransientMood(hint),
     onLiveTurnComplete: handleLiveTurnComplete,
-    onUnauthorized: () => setShowAccessModal(true),
+    onUnauthorized: clearStoredAccessCode,
   });
   liveRef.current = live;
 
   const handleStartLive = () => {
-    if (requiresAccessCode && !accessCode) {
+    if (requiresAccessCode && !accessCodeRef.current) {
       setShowAccessModal(true);
       return;
     }
@@ -243,11 +278,12 @@ export default function App() {
       history: recentHistory,
       ledger: game.ledger,
       openingCue: scenario.liveOpeningCue,
-      accessCode,
+      accessCode: accessCodeRef.current,
     });
   };
 
   const handleToggleVoiceCall = () => {
+    if (game.micCutSecondsLeft > 0) return;
     if (live.status === "live" || live.status === "connecting") {
       live.disconnect("Chamada de voz encerrada.");
     } else {
@@ -256,9 +292,10 @@ export default function App() {
   };
 
   const handleSendText = async (message: string) => {
-    if (game.micCutSecondsLeft > 0) return;
+    if (game.micCutSecondsLeft > 0 || isSendingRef.current) return;
 
-    if (requiresAccessCode && !accessCode) {
+    const activeCode = accessCodeRef.current;
+    if (requiresAccessCode && !activeCode) {
       setShowAccessModal(true);
       return;
     }
@@ -280,10 +317,15 @@ export default function App() {
       }
     }
 
+    isSendingRef.current = true;
     setIsSendingText(true);
     game.setTransientMood("falando");
 
     const replyId = makeId("ast");
+    const abortController = new AbortController();
+    chatAbortRef.current?.abort();
+    chatAbortRef.current = abortController;
+
     const history: RecentTurn[] = entries
       .filter((e) => e.role === "user" || e.role === "assistant")
       .slice(-14)
@@ -301,13 +343,15 @@ export default function App() {
           history,
           ledger: game.ledger,
           stream: true,
-          accessCode,
+          accessCode: activeCode,
         }),
+        signal: abortController.signal,
       });
 
       if (res.status === 401) {
-        setShowAccessModal(true);
-        appendSystemEvent("Senha de gabinete necessária.");
+        setEntries((prev) => prev.filter((item) => item.id !== userEntry.id));
+        clearStoredAccessCode();
+        appendSystemEvent("Senha de gabinete inválida ou expirada.");
         return;
       }
 
@@ -322,6 +366,7 @@ export default function App() {
       }
 
       let fullReply = "";
+      let streamError: string | null = null;
       const contentType = res.headers.get("Content-Type") || "";
 
       const processSseBlock = (block: string) => {
@@ -339,6 +384,7 @@ export default function App() {
           const payload = JSON.parse(dataLine) as {
             delta?: string;
             reply?: string;
+            error?: string;
           };
           if (eventName === "delta" && payload.delta) {
             fullReply += payload.delta;
@@ -355,6 +401,10 @@ export default function App() {
                 item.id === replyId ? { ...item, text: fullReply } : item
               )
             );
+          } else if (eventName === "error") {
+            streamError =
+              payload.error ||
+              "O estúdio do Gabinete 222 teve uma oscilação. Tente novamente.";
           }
         } catch {
           // ignore malformed SSE packet
@@ -362,6 +412,7 @@ export default function App() {
       };
 
       if (contentType.includes("text/event-stream") && res.body) {
+        setStreamingReplyId(replyId);
         setEntries((prev) => [
           ...prev,
           {
@@ -381,16 +432,39 @@ export default function App() {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-          buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
+          buffer = (buffer + decoder.decode(value, { stream: true }))
+            .replace(/\r\n/g, "\n")
+            .replace(/\r/g, "\n");
 
           const blocks = buffer.split("\n\n");
           buffer = blocks.pop() ?? "";
           for (const block of blocks) {
-            processSseBlock(block);
+            if (block.trim()) processSseBlock(block);
           }
         }
+
+        const tail = decoder.decode();
+        if (tail) {
+          buffer = (buffer + tail)
+            .replace(/\r\n/g, "\n")
+            .replace(/\r/g, "\n");
+        }
         if (buffer.trim()) {
-          processSseBlock(buffer);
+          for (const block of buffer.split("\n\n")) {
+            if (block.trim()) processSseBlock(block);
+          }
+        }
+
+        if (streamError || !fullReply.trim()) {
+          setEntries((prev) =>
+            prev.filter(
+              (item) => item.id !== replyId || item.text.trim().length > 0
+            )
+          );
+          if (streamError) {
+            appendSystemEvent(streamError);
+            return;
+          }
         }
       } else {
         const data = (await res.json().catch(() => ({}))) as { reply?: string };
@@ -411,9 +485,11 @@ export default function App() {
       }
 
       // UNLOCK CHAT IMMEDIATELY after reply finishes — run AI Director asynchronously in background!
+      setStreamingReplyId(null);
+      isSendingRef.current = false;
       setIsSendingText(false);
 
-      if (fullReply.trim()) {
+      if (fullReply.trim() && !abortController.signal.aborted) {
         const fallbackMood = inferMoodFromText(fullReply, "falando");
         game.setTransientMood(fallbackMood);
 
@@ -421,7 +497,7 @@ export default function App() {
           .evaluateTurnWithDirector({
             userMessage: message,
             assistantReply: fullReply,
-            accessCode,
+            accessCode: activeCode,
             nowLabel: formatNow(),
             isLive: false,
             onSystemEvent: appendSystemEvent,
@@ -440,13 +516,31 @@ export default function App() {
           });
       }
     } catch {
-      appendSystemEvent("Falha de conexão com o Gabinete 222.");
+      setEntries((prev) =>
+        prev.filter(
+          (item) => item.id !== replyId || item.text.trim().length > 0
+        )
+      );
+      if (!abortController.signal.aborted) {
+        appendSystemEvent("Falha de conexão com o Gabinete 222.");
+      }
     } finally {
+      if (chatAbortRef.current === abortController) {
+        chatAbortRef.current = null;
+      }
+      setStreamingReplyId(null);
+      isSendingRef.current = false;
       setIsSendingText(false);
     }
   };
 
   const handleSelectScenario = (scenarioId: ScenarioId) => {
+    chatAbortRef.current?.abort();
+    chatAbortRef.current = null;
+    isSendingRef.current = false;
+    setIsSendingText(false);
+    setStreamingReplyId(null);
+
     if (live.status === "live" || live.status === "connecting") {
       live.disconnect();
     }
@@ -459,10 +553,11 @@ export default function App() {
   };
 
   const handleVerifiedAccessCode = (code: string) => {
+    accessCodeRef.current = code;
     setAccessCode(code);
     setShowAccessModal(false);
     try {
-      window.sessionStorage.setItem("gabinete_clarice_code", code);
+      window.sessionStorage.setItem(ACCESS_CODE_STORAGE_KEY, code);
     } catch {
       // ignore storage errors
     }
@@ -492,6 +587,16 @@ export default function App() {
         onResetChat={handleResetChat}
       />
 
+      {game.activeInterrupt && (
+        <div className="interrupt-ribbon" role="status" aria-live="polite">
+          <Radio size={14} />
+          <div>
+            <strong>{game.activeInterrupt.badge}</strong>
+            <span>{game.activeInterrupt.headline}</span>
+          </div>
+        </div>
+      )}
+
       <div className="cabinet-container">
         <CabinetMetersBar
           scenarioId={game.ledger.scenarioId}
@@ -517,7 +622,6 @@ export default function App() {
             inputLevel={live.inputLevel}
             remainingSeconds={live.remainingSeconds}
             error={live.error}
-            activeInterrupt={game.activeInterrupt}
             documents={game.ledger.documents}
             onInspectDocument={(doc) => game.setActiveDocument(doc)}
             onStartLive={handleStartLive}
@@ -531,8 +635,9 @@ export default function App() {
             headlineTicker={game.ledger.headlineTicker}
             scenarioBadge={activeScenario.badge}
             suggestedMoves={game.ledger.suggestedMoves}
-            isLive={live.status === "live"}
+            liveStatus={live.status}
             isSendingText={isSendingText}
+            streamingReplyId={streamingReplyId}
             micCutSecondsLeft={game.micCutSecondsLeft}
             onSendText={(msg) => void handleSendText(msg)}
             onToggleVoiceCall={handleToggleVoiceCall}

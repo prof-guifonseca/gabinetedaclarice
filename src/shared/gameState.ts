@@ -74,7 +74,14 @@ export interface CabinetDocument {
 
 export interface BackstageInterrupt {
   id: string;
-  source: "marido_zap" | "hotmart" | "social_media" | "corredor_bento" | "recado_vava" | "flagra_x";
+  source:
+    | "marido_zap"
+    | "hotmart"
+    | "social_media"
+    | "corredor_bento"
+    | "recado_vava"
+    | "flagra_x"
+    | "invasao_jeremias";
   badge: string;
   headline: string;
   chatSystemNote: string;
@@ -380,6 +387,163 @@ export function sanitizeDirectorPatch(raw: unknown): DirectorPatch {
   };
 }
 
+export function evaluateSessionOutcome(
+  ledger: SessionLedger,
+  nextMeters: CabinetMeters,
+  nextTurn: number,
+  documents: CabinetDocument[]
+): {
+  endedReason?: SessionEndReason;
+  endedTitle?: string;
+  endedSummary?: string;
+  justEnded: boolean;
+} {
+  if (ledger.endedReason) {
+    return {
+      endedReason: ledger.endedReason,
+      endedTitle: ledger.endedTitle,
+      endedSummary: ledger.endedSummary,
+      justEnded: false,
+    };
+  }
+
+  if (nextMeters.compostura <= 0) {
+    return {
+      endedReason: "expulso",
+      endedTitle: "Live Encerrada & Nome no Canal de Denúncias!",
+      endedSummary:
+        "A compostura tradicional da Deputada Clarice zerou. O Enzo desligou seu microfone, recortou o clipe pro Reels e protocolou seu nome no Canal Escola Sem Doutrinação.",
+      justEnded: true,
+    };
+  }
+
+  if (
+    ledger.scenarioId === "paradoxo_tradwife" &&
+    nextMeters.paradoxoTradwife >= 85
+  ) {
+    return {
+      endedReason: "vitoria",
+      endedTitle: "Paradoxo Tradwife Exposto em Rede Nacional!",
+      endedSummary:
+        "Você encurralou a Deputada entre as 3 babás em SC, o marido no WhatsApp e o salário de Brasília. O print já está nos Trending Topics!",
+      justEnded: true,
+    };
+  }
+
+  if (
+    ledger.scenarioId === "professor_historia" &&
+    nextMeters.cortesVirais >= 75
+  ) {
+    return {
+      endedReason: "vitoria",
+      endedTitle: "Aula Salva! Selo de Professor Isento Conquistado!",
+      endedSummary:
+        "Por milagre retórico, você convenceu a Deputada Clarice de que sua aula de Revolução Francesa defende os valores da família (e ganhou um cupom de 10% do livro dela).",
+      justEnded: true,
+    };
+  }
+
+  if (
+    ledger.scenarioId === "mentoria_hotmart" &&
+    (nextMeters.faturamentoHotmartK >= 180 ||
+      (nextTurn >= 2 &&
+        nextMeters.faturamentoHotmartK >= 140 &&
+        documents.some((d) => d.action.type === "lancar_oferta_hotmart")))
+  ) {
+    return {
+      endedReason: "vitoria",
+      endedTitle: "Carrinho Hotmart Explodiu — Turma VIP Fechada!",
+      endedSummary: `Você destravou R$ ${nextMeters.faturamentoHotmartK}k no funil da Mentoria Esposa de Alto Valor (com direito ao módulo secreto da babá!).`,
+      justEnded: true,
+    };
+  }
+
+  if (ledger.scenarioId === "guerra_corredor" && documents.length >= 2) {
+    return {
+      endedReason: "vitoria",
+      endedTitle: "Pacto do Quarteto Caótico Selado no Anexo IV!",
+      endedSummary:
+        "Você arrancou 2 atos oficiais da Deputada Clarice, neutralizou o Prof. Bento e o megafone do Cabo Jeremias no corredor e voltou pro Gabinete 412 do Dr. Vavá com a pauta fechada!",
+      justEnded: true,
+    };
+  }
+
+  if (
+    ledger.scenarioId !== "paradoxo_tradwife" &&
+    nextMeters.paradoxoTradwife >= 100
+  ) {
+    return {
+      endedReason: "paradoxo_explodiu",
+      endedTitle: "Crise no Story: O Marido Apareceu no Fundo da Live!",
+      endedSummary:
+        "A contradição tradwife passou do limite: o Dr. Fabrício ligou ao vivo perguntando da papinha das crianças em SC e o Enzo teve que derrubar a transmissão.",
+      justEnded: true,
+    };
+  }
+
+  return { justEnded: false };
+}
+
+export function applyBackstageInterrupt(
+  ledger: SessionLedger,
+  interrupt: BackstageInterrupt
+): {
+  nextLedger: SessionLedger;
+  justEnded: boolean;
+} {
+  const delta = interrupt.meterDelta ?? {};
+  const nextMeters: CabinetMeters = {
+    cortesVirais: clamp(
+      ledger.meters.cortesVirais + (delta.cortesVirais ?? 0),
+      0,
+      100
+    ),
+    paradoxoTradwife: clamp(
+      ledger.meters.paradoxoTradwife + (delta.paradoxoTradwife ?? 0),
+      0,
+      100
+    ),
+    faturamentoHotmartK: clamp(
+      ledger.meters.faturamentoHotmartK + (delta.faturamentoHotmartK ?? 0),
+      0,
+      500
+    ),
+    compostura: clamp(
+      ledger.meters.compostura + (delta.compostura ?? 0),
+      0,
+      100
+    ),
+  };
+
+  const nextAct = computeDramaticAct(ledger.turnCount, nextMeters);
+  const outcome = evaluateSessionOutcome(
+    ledger,
+    nextMeters,
+    ledger.turnCount,
+    ledger.documents
+  );
+
+  const triggeredInterruptIds = ledger.triggeredInterruptIds.includes(
+    interrupt.id
+  )
+    ? ledger.triggeredInterruptIds
+    : [...ledger.triggeredInterruptIds, interrupt.id];
+
+  return {
+    nextLedger: {
+      ...ledger,
+      act: nextAct,
+      meters: nextMeters,
+      triggeredInterruptIds,
+      headlineTicker: interrupt.headline,
+      endedReason: outcome.endedReason,
+      endedTitle: outcome.endedTitle,
+      endedSummary: outcome.endedSummary,
+    },
+    justEnded: outcome.justEnded,
+  };
+}
+
 export function applyDirectorPatch(
   ledger: SessionLedger,
   patch: DirectorPatch,
@@ -482,67 +646,8 @@ export function applyDirectorPatch(
     : ledger.bestQuote;
 
   // Evaluate scenario outcomes
-  let endedReason = ledger.endedReason;
-  let endedTitle = ledger.endedTitle;
-  let endedSummary = ledger.endedSummary;
-  let justEnded = false;
-
-  if (!endedReason) {
-    if (nextMeters.compostura <= 0) {
-      endedReason = "expulso";
-      endedTitle = "Live Encerrada & Nome no Canal de Denúncias!";
-      endedSummary =
-        "A compostura tradicional da Deputada Clarice zerou. O Enzo desligou seu microfone, recortou o clipe pro Reels e protocolou seu nome no Canal Escola Sem Doutrinação.";
-      justEnded = true;
-    } else if (
-      ledger.scenarioId === "paradoxo_tradwife" &&
-      nextMeters.paradoxoTradwife >= 85
-    ) {
-      endedReason = "vitoria";
-      endedTitle = "Paradoxo Tradwife Exposto em Rede Nacional!";
-      endedSummary =
-        "Você encurralou a Deputada entre as 3 babás em SC, o marido no WhatsApp e o salário de Brasília. O print já está nos Trending Topics!";
-      justEnded = true;
-    } else if (
-      ledger.scenarioId === "professor_historia" &&
-      nextMeters.cortesVirais >= 75
-    ) {
-      endedReason = "vitoria";
-      endedTitle = "Aula Salva! Selo de Professor Isento Conquistado!";
-      endedSummary =
-        "Por milagre retórico, você convenceu a Deputada Clarice de que sua aula de Revolução Francesa defende os valores da família (e ganhou um cupom de 10% do livro dela).";
-      justEnded = true;
-    } else if (
-      ledger.scenarioId === "mentoria_hotmart" &&
-      (nextMeters.faturamentoHotmartK >= 180 ||
-        (nextTurn >= 2 &&
-          nextMeters.faturamentoHotmartK >= 140 &&
-          documents.some((d) => d.action.type === "lancar_oferta_hotmart")))
-    ) {
-      endedReason = "vitoria";
-      endedTitle = "Carrinho Hotmart Explodiu — Turma VIP Fechada!";
-      endedSummary = `Você destravou R$ ${nextMeters.faturamentoHotmartK}k no funil da Mentoria Esposa de Alto Valor (com direito ao módulo secreto da babá!).`;
-      justEnded = true;
-    } else if (
-      ledger.scenarioId === "guerra_corredor" &&
-      documents.length >= 2
-    ) {
-      endedReason = "vitoria";
-      endedTitle = "Pacto da Trinca Caótica Selado no Anexo IV!";
-      endedSummary =
-        "Você arrancou 2 atos oficiais da Deputada Clarice, neutralizou o megafone do Prof. Bento no corredor e voltou pro Gabinete 412 do Dr. Vavá com a pauta fechada!";
-      justEnded = true;
-    } else if (
-      ledger.scenarioId !== "paradoxo_tradwife" &&
-      nextMeters.paradoxoTradwife >= 100
-    ) {
-      endedReason = "paradoxo_explodiu";
-      endedTitle = "Crise no Story: O Marido Apareceu no Fundo da Live!";
-      endedSummary =
-        "A contradição tradwife passou do limite: o Dr. Fabrício ligou ao vivo perguntando da papinha das crianças em SC e o Enzo teve que derrubar a transmissão.";
-      justEnded = true;
-    }
-  }
+  const { endedReason, endedTitle, endedSummary, justEnded } =
+    evaluateSessionOutcome(ledger, nextMeters, nextTurn, documents);
 
   const nextLedger: SessionLedger = {
     ...ledger,

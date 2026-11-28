@@ -170,7 +170,15 @@ export function CabinetMetersBar({
               <span className="meter-value is-emerald">
                 R$&nbsp;{meters.faturamentoHotmartK}k
                 {deltaHotmart && (
-                  <em className="delta-badge is-pos">{deltaHotmart}</em>
+                  <em
+                    className={`delta-badge ${
+                      (lastDeltas?.faturamentoHotmartK ?? 0) > 0
+                        ? "is-pos"
+                        : "is-neg"
+                    }`}
+                  >
+                    {deltaHotmart}
+                  </em>
                 )}
               </span>
             </div>

@@ -1,17 +1,6 @@
 import type { CSSProperties } from "react";
-import {
-  Camera,
-  FileText,
-  Mic,
-  MicOff,
-  PhoneOff,
-  Radio,
-} from "lucide-react";
-import type {
-  AvatarMood,
-  BackstageInterrupt,
-  CabinetDocument,
-} from "../shared/gameState";
+import { Camera, FileText, Mic, MicOff, PhoneOff } from "lucide-react";
+import type { AvatarMood, CabinetDocument } from "../shared/gameState";
 import type { LiveConnectionState } from "../hooks/useGptLiveSession";
 
 interface AvatarStageProps {
@@ -28,7 +17,6 @@ interface AvatarStageProps {
   inputLevel: number;
   remainingSeconds: number;
   error: string | null;
-  activeInterrupt: BackstageInterrupt | null;
   documents: CabinetDocument[];
   onInspectDocument: (doc: CabinetDocument) => void;
   onStartLive: () => void;
@@ -75,7 +63,6 @@ export function AvatarStage({
   inputLevel,
   remainingSeconds,
   error,
-  activeInterrupt,
   documents,
   onInspectDocument,
   onStartLive,
@@ -111,16 +98,20 @@ export function AvatarStage({
           data-mood={activeMood}
           style={viewportStyle}
         >
-          {(Object.keys(AVATAR_SOURCES) as AvatarMood[]).map((key) => (
-            <img
-              key={key}
-              src={AVATAR_SOURCES[key]}
-              alt='Dep. Prof.ª Clarice "Clá" Alencar'
-              fetchPriority={key === "neutro" ? "high" : "low"}
-              decoding={key === "neutro" ? "sync" : "async"}
-              className={`avatar-img ${activeMood === key ? "is-active" : ""}`}
-            />
-          ))}
+          {(Object.keys(AVATAR_SOURCES) as AvatarMood[]).map((key) => {
+            const isActive = activeMood === key;
+            return (
+              <img
+                key={key}
+                src={AVATAR_SOURCES[key]}
+                alt={isActive ? 'Dep. Prof.ª Clarice "Clá" Alencar' : ""}
+                aria-hidden={!isActive}
+                fetchPriority={key === "neutro" ? "high" : "low"}
+                decoding={key === "neutro" ? "sync" : "async"}
+                className={`avatar-img ${isActive ? "is-active" : ""}`}
+              />
+            );
+          })}
 
           <div className="avatar-vignette" />
           <div className="avatar-halo" />
@@ -141,21 +132,16 @@ export function AvatarStage({
             <span className="tv-mood-pill">{MOOD_LABELS[activeMood]}</span>
           </div>
 
-          {activeInterrupt && (
-            <div className="interrupt-ribbon" role="status">
-              <Radio size={13} />
-              <div>
-                <strong>{activeInterrupt.badge}</strong>
-                <span>{activeInterrupt.headline}</span>
-              </div>
-            </div>
-          )}
-
           {micCutSecondsLeft > 0 && (
             <div className="mic-cut-overlay" role="alert">
               <Camera size={22} />
               <strong>GRAVANDO CORTE PRO REELS — MIC SILENCIADO</strong>
-              <span>Ring Light liberando em {micCutSecondsLeft}s...</span>
+              <span className="mic-cut-detail">
+                Ring Light liberando em {micCutSecondsLeft}s...
+              </span>
+              <span className="mic-cut-countdown" aria-hidden="true">
+                {micCutSecondsLeft}s
+              </span>
             </div>
           )}
 
@@ -203,7 +189,7 @@ export function AvatarStage({
               <button
                 type="button"
                 className="btn-voice"
-                disabled={status === "connecting"}
+                disabled={status === "connecting" || micCutSecondsLeft > 0}
                 onClick={onStartLive}
               >
                 <Mic size={16} />
@@ -223,6 +209,7 @@ export function AvatarStage({
                   className={`btn-secondary ${isMuted ? "is-muted" : ""}`}
                   disabled={isForceMuted}
                   onClick={onToggleMute}
+                  aria-pressed={isMuted}
                   aria-label={
                     isMuted ? "Ativar microfone" : "Silenciar microfone"
                   }

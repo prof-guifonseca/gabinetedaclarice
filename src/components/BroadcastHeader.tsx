@@ -102,6 +102,7 @@ export function BroadcastHeader({
           type="button"
           className="header-btn icon-only"
           onClick={onToggleSfx}
+          aria-pressed={sfxMuted}
           title={
             sfxMuted
               ? "Ativar efeitos sonoros do estúdio"

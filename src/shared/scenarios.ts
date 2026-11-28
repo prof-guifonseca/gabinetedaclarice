@@ -218,15 +218,15 @@ export const SCENARIOS: Record<ScenarioId, ScenarioDefinition> = {
     id: "guerra_corredor",
     title: "Batalha do Anexo IV",
     badge: "Emissário do Vavá",
-    visitorRole: "Articulador da Trinca Caótica",
+    visitorRole: "Articulador do Quarteto Caótico",
     tagline:
-      "Negocie a pauta entre o Dr. Vavá (Gab. 412) e a fúria contra o Prof. Bento (Gab. 717) arrancando 2 atos oficiais!",
+      "Negocie a pauta entre Dr. Vavá (Gab. 412), Prof. Bento (Gab. 717) e Cabo Jeremias (Gab. 190) arrancando 2 atos oficiais!",
     objective:
-      "Meta: fazer a Deputada emitir 2 documentos oficiais (Corte, Ofício ou Oferta) selando o pacto da Trinca.",
+      "Meta: fazer a Deputada emitir 2 documentos oficiais (Corte, Ofício ou Oferta) selando o pacto do Quarteto.",
     openingGreeting:
-      "Ah, veio a mando do Dr. Vavá lá do 412? Avisa pra ele que eu não vendo meus princípios por emenda de asfalto — mas dependendo da comissão que ele me der pra enquadrar o Prof. Bento, a gente conversa!",
+      "Ah, veio a mando do Dr. Vavá lá do 412? Avisa pra ele que eu não vendo meus princípios por emenda de asfalto — mas se liberar minha comissão pra enquadrar o Prof. Bento e tirar o megafone do Cabo Jeremias da frente da minha câmera, a gente conversa!",
     liveOpeningCue:
-      "Receba um emissário mandado pelo Dep. Dr. Vavá do Gabinete 412 em 1 frase afiada, dizendo que não se vende por emenda mas aceita conversar se for pra barrar o Prof. Bento.",
+      "Receba um emissário mandado pelo Dep. Dr. Vavá do Gabinete 412 em 1 frase afiada, dizendo que não se vende por emenda mas aceita conversar se for pra barrar o Prof. Bento e afastar o megafone do Cabo Jeremias do seu estúdio.",
     initialMeters: {
       cortesVirais: 50,
       paradoxoTradwife: 25,
@@ -234,7 +234,7 @@ export const SCENARIOS: Record<ScenarioId, ScenarioDefinition> = {
       compostura: 80,
     },
     initialHeadline:
-      "ANEXO IV EM CHAMAS • TRINCA CAÓTICA DISPUTA PAUTA ENTRE GABINETES 412, 717 E 222",
+      "ANEXO IV EM CHAMAS • QUARTETO CAÓTICO DISPUTA PAUTA ENTRE GABINETES 412, 717, 222 E 190",
     initialMoves: [
       {
         id: "tri-1",
@@ -245,9 +245,9 @@ export const SCENARIOS: Record<ScenarioId, ScenarioDefinition> = {
       },
       {
         id: "tri-2",
-        label: "📣 Contar que o Bento chamou o curso de golpe",
+        label: "📢 Contar que o Cabo Jeremias roubou a live",
         prompt:
-          "Acabei de sair do Gabinete 717 e o Prof. Bento disse numa live que a sua mentoria na Hotmart é 'neoliberalismo doméstico de planilha'! Vai deixar barato?",
+          "O Cabo Jeremias do Gabinete 190 estacionou a Hilux na porta falando que o seu ring light é frescura e vendendo caneca camuflada na Shopee pros seus seguidores! Vai deixar barato?",
         tone: "blefe",
       },
       {
@@ -259,7 +259,7 @@ export const SCENARIOS: Record<ScenarioId, ScenarioDefinition> = {
       },
     ],
     promptContext:
-      "MISSÃO ATIVA: O visitante é um emissário vindo do Gabinete 412 (Dep. Dr. Vavá, Centrão) para negociar a pauta da semana enquanto o arquirrival Prof. Bento (Gabinete 717, esquerda acadêmica do PSA/RJ) tenta obstruir tudo no corredor. Detone o Bento sem dó, finja escrúpulo moral diante do Vavá mas acabe fechando acordo pragmático se ganhar palco, corte viral ou relatoria de costumes!",
+      "MISSÃO ATIVA: O visitante é um emissário vindo do Gabinete 412 (Dep. Dr. Vavá, Centrão) para negociar a pauta da semana enquanto o arquirrival Prof. Bento (Gabinete 717, esquerda acadêmica do PSA/RJ) tenta obstruir tudo e o Dep. Cabo Jeremias 'Tático' Santana (Gabinete 190, PBP/GO) trava uma Aliança Tóxica disputando câmera, seguidores e ring light com o megafone dele, a Hilux de R$ 92 mil de gasolina e caneca camuflada da Shopee! Detone o Bento, alfinete o amadorismo do Cabo Jeremias e feche acordo pragmático com o Vavá se ganhar palco, corte viral ou relatoria de costumes!",
   },
 };
 
@@ -351,6 +351,22 @@ export const BACKSTAGE_INTERRUPTS: BackstageInterrupt[] = [
     mood: "celular",
     meterDelta: { paradoxoTradwife: 8, cortesVirais: 6 },
     minTurn: 5,
+  },
+  {
+    id: "invasao_jeremias_megafone",
+    source: "invasao_jeremias",
+    badge: "CORREDOR • CABO JEREMIAS (GAB. 190)",
+    headline:
+      "ALIANÇA TÓXICA: CABO JEREMIAS INVADIU O ENQUADRAMENTO COM MEGAFONE VENDENDO CANECA CAMUFLADA (CUPOM CAVEIRA10)!",
+    chatSystemNote:
+      "🪖 Corredor (Gab. 190): Dep. Cabo Jeremias \"Tático\" Santana passou com megafone na porta gritando \"SELVA! SAI DA FRENTE DA MINHA LIVE!\", exibindo caneca camuflada da Shopee e o boleto de R$ 92 mil de gasolina da Hilux blindada!",
+    liveInstruction:
+      "EVENTO AO VIVO NO ESTÚDIO: Seu colega de Aliança Tóxica, Dep. Cabo Jeremias (Gab. 190, PBP/GO), acabou de estragar a luz do seu ring light passando no corredor de megafone vendendo caneca camuflada da Shopee (cupom CAVEIRA10) depois de gastar R$ 92 mil de gasolina na Hilux! Reclame da falta de classe dele em 1 frase ácida e retome a conversa.",
+    liveCommentary:
+      "O Cabo Jeremias do Gabinete 190 passou de megafone na frente do seu ring light vendendo caneca camuflada na Shopee e buzinando a Hilux de noventa e dois mil de gasolina!",
+    mood: "crise",
+    meterDelta: { cortesVirais: 9, compostura: -8 },
+    minTurn: 4,
   },
   {
     id: "flagra_bolo_banco_imagens",

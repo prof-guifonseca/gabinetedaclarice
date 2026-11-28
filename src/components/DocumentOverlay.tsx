@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   BadgeCheck,
   Clapperboard,
@@ -11,6 +11,7 @@ import {
   X,
 } from "lucide-react";
 import type { CabinetDocument } from "../shared/gameState";
+import { useModalBehavior } from "../hooks/useModalBehavior";
 import {
   downloadBlob,
   generateDocumentCard,
@@ -30,8 +31,37 @@ export function DocumentOverlay({
 }: DocumentOverlayProps) {
   const [shareFeedback, setShareFeedback] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const feedbackTimerRef = useRef<number | null>(null);
+
+  useModalBehavior(Boolean(doc), onClose);
+
+  useEffect(() => {
+    if (feedbackTimerRef.current !== null) {
+      window.clearTimeout(feedbackTimerRef.current);
+      feedbackTimerRef.current = null;
+    }
+    setShareFeedback(null);
+    setBusy(false);
+
+    return () => {
+      if (feedbackTimerRef.current !== null) {
+        window.clearTimeout(feedbackTimerRef.current);
+        feedbackTimerRef.current = null;
+      }
+    };
+  }, [doc?.id]);
 
   if (!doc) return null;
+
+  const scheduleFeedbackClear = () => {
+    if (feedbackTimerRef.current !== null) {
+      window.clearTimeout(feedbackTimerRef.current);
+    }
+    feedbackTimerRef.current = window.setTimeout(() => {
+      feedbackTimerRef.current = null;
+      setShareFeedback(null);
+    }, 2600);
+  };
 
   const handleExport = async (mode: "copy" | "download") => {
     setBusy(true);
@@ -41,6 +71,7 @@ export function DocumentOverlay({
       if (mode === "download") {
         downloadBlob(blob, filename);
         setShareFeedback("PNG salvo!");
+        scheduleFeedbackClear();
       } else {
         const result = await shareImageNativeOrCopy(
           blob,
@@ -48,15 +79,20 @@ export function DocumentOverlay({
           "Documento do Gabinete da Clarice",
           "Olha o que a Dep. Clarice disparou no Gabinete 222: https://gabinetedaclarice.pages.dev"
         );
-        setShareFeedback(
-          result === "shared"
-            ? "Compartilhado!"
-            : result === "copied"
-            ? "Copiado!"
-            : "PNG salvo!"
-        );
+        if (result !== "cancelled") {
+          setShareFeedback(
+            result === "shared"
+              ? "Compartilhado!"
+              : result === "copied"
+              ? "Copiado!"
+              : "PNG salvo!"
+          );
+          scheduleFeedbackClear();
+        }
       }
-      window.setTimeout(() => setShareFeedback(null), 2600);
+    } catch {
+      setShareFeedback("Erro ao gerar PNG.");
+      scheduleFeedbackClear();
     } finally {
       setBusy(false);
     }
@@ -99,7 +135,8 @@ export function DocumentOverlay({
             />
             <div className="reels-author-info">
               <strong>
-                @dep.clarice.oficial <BadgeCheck size={14} className="verified-icon" />
+                @dep.clarice.oficial{" "}
+                <BadgeCheck size={14} className="verified-icon" />
               </strong>
               <span>
                 Estúdio-Gabinete 222 · Turno {doc.turn} · {doc.createdAt}

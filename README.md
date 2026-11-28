@@ -1,6 +1,6 @@
 # Gabinete da Clarice — Gabinete 222 · Anexo IV
 
-Terceira peça da **Trinca Caótica do Anexo IV** (ao lado do [Gabinete do Vavá](https://gabinetedovava.pages.dev) e do [Gabinete do Bento](https://gabinetedobento.pages.dev)): sátira política 100% ficcional estrelada pela **Dep. Prof.ª Clarice "Clá" Alencar (PFM/SC)** — Vice-Líder da Frente da Família & Costumes, autora de best-seller de guerra cultural e dona da *Mentoria Esposa de Alto Valor (12x de R$ 197)*.
+Peça do **Quarteto Caótico da Câmara** (ao lado do [Gabinete do Vavá](https://gabinetedovava.pages.dev), do [Gabinete do Bento](https://gabinetedobento.pages.dev) e do [Plenário Caótico · Debate dos 4 ao Vivo](https://plenariocaotico.pages.dev) com o Dep. Cabo Jeremias "Tático" do Gab. 190): sátira política 100% ficcional estrelada pela **Dep. Prof.ª Clarice "Clá" Alencar (PFM/SC)** — Vice-Líder da Frente da Família & Costumes, autora de best-seller de guerra cultural e dona da *Mentoria Esposa de Alto Valor (12x de R$ 197)*.
 
 ## Arquitetura 2.0 (Dual-Brain + Voz Customizada)
 

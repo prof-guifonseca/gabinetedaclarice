@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Copy,
   Download,
@@ -13,6 +13,7 @@ import {
   type SessionLedger,
 } from "../shared/gameState";
 import { SCENARIOS } from "../shared/scenarios";
+import { useModalBehavior } from "../hooks/useModalBehavior";
 import {
   downloadBlob,
   generateDossierCard,
@@ -36,6 +37,25 @@ export function SessionSummaryModal({
 }: SessionSummaryModalProps) {
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const statusTimerRef = useRef<number | null>(null);
+
+  useModalBehavior(open, onClose);
+
+  useEffect(() => {
+    if (statusTimerRef.current !== null) {
+      window.clearTimeout(statusTimerRef.current);
+      statusTimerRef.current = null;
+    }
+    setStatusMsg(null);
+    setBusy(false);
+
+    return () => {
+      if (statusTimerRef.current !== null) {
+        window.clearTimeout(statusTimerRef.current);
+        statusTimerRef.current = null;
+      }
+    };
+  }, [open]);
 
   if (!open) return null;
 
@@ -46,6 +66,16 @@ export function SessionSummaryModal({
       ? ledger.endedTitle
       : "Resumo da Audiência";
 
+  const scheduleStatusClear = () => {
+    if (statusTimerRef.current !== null) {
+      window.clearTimeout(statusTimerRef.current);
+    }
+    statusTimerRef.current = window.setTimeout(() => {
+      statusTimerRef.current = null;
+      setStatusMsg(null);
+    }, 2600);
+  };
+
   const handleShare = async (mode: "copy" | "download") => {
     setBusy(true);
     try {
@@ -54,6 +84,7 @@ export function SessionSummaryModal({
       if (mode === "download") {
         downloadBlob(blob, filename);
         setStatusMsg("Boletim PNG salvo!");
+        scheduleStatusClear();
       } else {
         const res = await shareImageNativeOrCopy(
           blob,
@@ -61,15 +92,20 @@ export function SessionSummaryModal({
           `Boletim do Gabinete da Clarice — ${arch.title}`,
           `Saí do Gabinete 222 como "${arch.title}"! Testa lá: https://gabinetedaclarice.pages.dev`
         );
-        setStatusMsg(
-          res === "shared"
-            ? "Boletim compartilhado!"
-            : res === "copied"
-            ? "Card copiado! Cole no WhatsApp."
-            : "Boletim PNG salvo!"
-        );
+        if (res !== "cancelled") {
+          setStatusMsg(
+            res === "shared"
+              ? "Boletim compartilhado!"
+              : res === "copied"
+              ? "Card copiado! Cole no WhatsApp."
+              : "Boletim PNG salvo!"
+          );
+          scheduleStatusClear();
+        }
       }
-      window.setTimeout(() => setStatusMsg(null), 2600);
+    } catch {
+      setStatusMsg("Erro ao gerar boletim PNG.");
+      scheduleStatusClear();
     } finally {
       setBusy(false);
     }
@@ -198,7 +234,7 @@ export function SessionSummaryModal({
         </div>
 
         <div className="trinca-bar">
-          <span className="trinca-label">VISITE OS VIZINHOS DA TRINCA CAÓTICA</span>
+          <span className="trinca-label">QUARTETO CAÓTICO DA CÂMARA</span>
           <div className="trinca-links">
             <a
               href="https://gabinetedovava.pages.dev"
@@ -214,7 +250,18 @@ export function SessionSummaryModal({
               rel="noreferrer"
               className="trinca-pill"
             >
-              Gab. 717 · Prof. Bento <ExternalLink size={11} />
+              Gab. 717 · Prof. Bento (Minoria · Anexo II){" "}
+              <ExternalLink size={11} />
+            </a>
+            <a
+              href="https://plenariocaotico.pages.dev"
+              target="_blank"
+              rel="noreferrer"
+              className="trinca-pill"
+              style={{ borderColor: "rgba(212, 164, 70, 0.7)", fontWeight: 700 }}
+            >
+              🏛️ Plenário Caótico · Debate dos 4 ao Vivo{" "}
+              <ExternalLink size={11} />
             </a>
           </div>
         </div>

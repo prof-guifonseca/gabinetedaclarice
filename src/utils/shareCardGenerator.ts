@@ -15,14 +15,62 @@ const AVATAR_PATHS: Record<AvatarMood, string> = {
   celular: "/avatars/clarice-celular.jpg",
 };
 
-function loadImage(src: string): Promise<HTMLImageElement | null> {
+function loadImage(
+  src: string,
+  timeoutMs = 6000
+): Promise<HTMLImageElement | null> {
   return new Promise((resolve) => {
+    let settled = false;
     const img = new Image();
     img.crossOrigin = "anonymous";
-    img.onload = () => resolve(img);
-    img.onerror = () => resolve(null);
+
+    const finish = (result: HTMLImageElement | null) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      img.onload = null;
+      img.onerror = null;
+      resolve(result);
+    };
+
+    const timer = window.setTimeout(() => finish(null), timeoutMs);
+    img.onload = () => finish(img);
+    img.onerror = () => finish(null);
     img.src = src;
   });
+}
+
+function fitLineWithEllipsis(
+  ctx: CanvasRenderingContext2D,
+  line: string,
+  maxWidth: number
+): string {
+  let trimmed = line.replace(/[.,;!?…]*$/, "").trim();
+  while (trimmed.length > 0 && ctx.measureText(`${trimmed}…`).width > maxWidth) {
+    trimmed = trimmed.slice(0, -1).trimEnd();
+  }
+  return trimmed ? `${trimmed}…` : "…";
+}
+
+function breakLongWord(
+  ctx: CanvasRenderingContext2D,
+  word: string,
+  maxWidth: number
+): string[] {
+  if (ctx.measureText(word).width <= maxWidth) return [word];
+  const chunks: string[] = [];
+  let part = "";
+  for (const ch of word) {
+    const candidate = `${part}${ch}`;
+    if (part && ctx.measureText(candidate).width > maxWidth) {
+      chunks.push(part);
+      part = ch;
+    } else {
+      part = candidate;
+    }
+  }
+  if (part) chunks.push(part);
+  return chunks;
 }
 
 function wrapText(
@@ -31,28 +79,50 @@ function wrapText(
   maxWidth: number,
   maxLines: number
 ): string[] {
-  const words = text.trim().split(/\s+/);
+  const normalized = text.trim();
+  if (!normalized || maxLines <= 0) return [];
+  const rawWords = normalized.split(/\s+/);
+  const tokens: string[] = [];
+  for (const word of rawWords) {
+    tokens.push(...breakLongWord(ctx, word, maxWidth));
+  }
+
   const lines: string[] = [];
   let current = "";
+  let truncated = false;
 
-  for (const word of words) {
-    const test = current ? `${current} ${word}` : word;
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    const test = current ? `${current} ${token}` : token;
     if (ctx.measureText(test).width <= maxWidth) {
       current = test;
     } else {
-      if (current) lines.push(current);
-      current = word;
-      if (lines.length >= maxLines) break;
+      if (current) {
+        lines.push(current);
+        if (lines.length >= maxLines) {
+          truncated = true;
+          current = "";
+          break;
+        }
+      }
+      current = token;
     }
   }
-  if (current && lines.length < maxLines) {
-    lines.push(current);
+
+  if (current) {
+    if (lines.length < maxLines) {
+      lines.push(current);
+    } else {
+      truncated = true;
+    }
   }
-  if (
-    lines.length === maxLines &&
-    words.join(" ").length > lines.join(" ").length
-  ) {
-    lines[maxLines - 1] = `${lines[maxLines - 1].replace(/[.,;!?]*$/, "")}…`;
+
+  if (truncated && lines.length > 0) {
+    lines[lines.length - 1] = fitLineWithEllipsis(
+      ctx,
+      lines[lines.length - 1],
+      maxWidth
+    );
   }
   return lines;
 }
@@ -63,14 +133,15 @@ function drawStamp(
   x: number,
   y: number,
   color = "#b83b5e",
-  angleRad = -0.14
+  angleRad = -0.14,
+  fontSize = 30
 ) {
   ctx.save();
   ctx.translate(x, y);
   ctx.rotate(angleRad);
-  ctx.font = '700 30px "JetBrains Mono", monospace';
-  const width = ctx.measureText(text).width + 44;
-  const height = 60;
+  ctx.font = `700 ${fontSize}px "JetBrains Mono", monospace`;
+  const width = ctx.measureText(text).width + 40;
+  const height = Math.round(fontSize * 1.9);
   ctx.strokeStyle = color;
   ctx.lineWidth = 5;
   ctx.strokeRect(-width / 2, -height / 2, width, height);
@@ -162,7 +233,7 @@ export async function generateQuoteCard(params: {
     ctx.fillStyle = "#f7efe0";
     ctx.font = '600 18px "JetBrains Mono", monospace';
     ctx.textAlign = "center";
-    ctx.fillText(params.badge.toUpperCase().slice(0, 22), 854, 111);
+    ctx.fillText(params.badge.toUpperCase().slice(0, 22), 854, 111, 268);
     ctx.textAlign = "left";
   }
 
@@ -183,17 +254,19 @@ export async function generateQuoteCard(params: {
   ctx.lineWidth = 2;
   ctx.strokeRect(56, 916, 968, 96);
 
+  // Left footer column constrained to maxWidth 560 (x: 80..640) — zero collision with domain on right (x: 670..1000)
   ctx.fillStyle = "#faf6ef";
-  ctx.font = '700 28px "Plus Jakarta Sans", system-ui, sans-serif';
-  ctx.fillText('Dep. Prof.ª Clarice "Clá" Alencar (PFM/SC)', 84, 956);
+  ctx.font = '700 24px "Plus Jakarta Sans", system-ui, sans-serif';
+  ctx.fillText('Dep. Prof.ª Clarice "Clá" Alencar (PFM/SC)', 80, 955, 560);
 
   ctx.fillStyle = "#d6b26e";
-  ctx.font = '500 20px "JetBrains Mono", monospace';
-  ctx.fillText("FRENTE DA FAMÍLIA & COSTUMES • GAB. 222", 84, 990);
+  ctx.font = '500 18px "JetBrains Mono", monospace';
+  ctx.fillText("FRENTE DA FAMÍLIA & COSTUMES • GAB. 222", 80, 989, 560);
 
   ctx.fillStyle = "#dce6f7";
+  ctx.font = '600 18px "JetBrains Mono", monospace';
   ctx.textAlign = "right";
-  ctx.fillText("gabinetedaclarice.pages.dev", 996, 976);
+  ctx.fillText("gabinetedaclarice.pages.dev", 1000, 975, 330);
   ctx.textAlign = "left";
 
   return canvasToBlob(canvas);
@@ -254,18 +327,23 @@ export async function generateDocumentCard(doc: CabinetDocument): Promise<Blob> 
   ctx.fillStyle = "#131f38";
 
   if (doc.action.type === "gravar_corte_reels") {
+    // Wrap views + hashtags cleanly left of the CORTE NO AR stamp
     ctx.fillStyle = "#c24163";
-    ctx.font = '700 24px "JetBrains Mono", monospace';
-    ctx.fillText(
+    ctx.font = '700 22px "JetBrains Mono", monospace';
+    const metaLines = wrapText(
+      ctx,
       `● VIRALIZOU • ${doc.action.viewsEstimadas} VIEWS • ${doc.action.hashtag}`,
-      96,
-      294
+      560,
+      2
     );
+    metaLines.forEach((l, i) => ctx.fillText(l, 96, 286 + i * 30));
+
+    drawStamp(ctx, "CORTE NO AR", 830, 302, "#c24163", -0.12, 26);
 
     ctx.fillStyle = "#131f38";
-    ctx.font = '700 48px "Playfair Display", Georgia, serif';
+    ctx.font = '700 46px "Playfair Display", Georgia, serif';
     const titleLines = wrapText(ctx, doc.action.tituloViral, 880, 4);
-    titleLines.forEach((l, i) => ctx.fillText(l, 96, 376 + i * 58));
+    titleLines.forEach((l, i) => ctx.fillText(l, 96, 392 + i * 56));
 
     ctx.fillStyle = "#eef2f9";
     ctx.fillRect(96, 636, 888, 196);
@@ -281,11 +359,9 @@ export async function generateDocumentCard(doc: CabinetDocument): Promise<Blob> 
     ctx.font = '500 24px "Plus Jakarta Sans", system-ui, sans-serif';
     const legLines = wrapText(ctx, doc.action.legendaCorte, 844, 4);
     legLines.forEach((l, i) => ctx.fillText(l, 118, 720 + i * 32));
-
-    drawStamp(ctx, "CORTE NO AR", 785, 340, "#c24163", -0.14);
   } else if (doc.action.type === "protocolar_denuncia_escola") {
     ctx.font = '700 24px "JetBrains Mono", monospace';
-    ctx.fillText(`PROTOCOLO: ${doc.action.protocolo}`, 96, 296);
+    ctx.fillText(`PROTOCOLO: ${doc.action.protocolo}`, 96, 296, 540);
 
     ctx.font = '700 34px "Playfair Display", Georgia, serif';
     const instLines = wrapText(
@@ -294,7 +370,7 @@ export async function generateDocumentCard(doc: CabinetDocument): Promise<Blob> 
       880,
       2
     );
-    instLines.forEach((l, i) => ctx.fillText(l, 96, 360 + i * 44));
+    instLines.forEach((l, i) => ctx.fillText(l, 96, 366 + i * 44));
 
     ctx.font = '500 28px "Plus Jakarta Sans", system-ui, sans-serif';
     const acusLines = wrapText(
@@ -303,7 +379,7 @@ export async function generateDocumentCard(doc: CabinetDocument): Promise<Blob> 
       880,
       5
     );
-    acusLines.forEach((l, i) => ctx.fillText(l, 96, 470 + i * 38));
+    acusLines.forEach((l, i) => ctx.fillText(l, 96, 474 + i * 38));
 
     ctx.fillStyle = "#f2e7d5";
     ctx.fillRect(96, 686, 888, 160);
@@ -320,24 +396,29 @@ export async function generateDocumentCard(doc: CabinetDocument): Promise<Blob> 
     const penLines = wrapText(ctx, doc.action.penalidadeProposta, 844, 3);
     penLines.forEach((l, i) => ctx.fillText(l, 118, 764 + i * 32));
 
-    drawStamp(ctx, "NOTIFICADO", 770, 315, "#b83b5e", 0.12);
+    drawStamp(ctx, "NOTIFICADO", 800, 306, "#b83b5e", 0.12, 28);
   } else {
     ctx.fillStyle = "#1f7a5a";
-    ctx.font = '700 24px "JetBrains Mono", monospace';
-    ctx.fillText(
+    ctx.font = '700 23px "JetBrains Mono", monospace';
+    const couponLines = wrapText(
+      ctx,
       `CUPOM: ${doc.action.cupom} • FATURAMENTO +R$ ${doc.action.valorFaturadoK}k`,
-      96,
-      296
+      880,
+      2
     );
+    couponLines.forEach((l, i) => ctx.fillText(l, 96, 290 + i * 30));
 
     ctx.fillStyle = "#131f38";
-    ctx.font = '700 44px "Playfair Display", Georgia, serif';
+    ctx.font = '700 42px "Playfair Display", Georgia, serif';
     const prodLines = wrapText(ctx, doc.action.nomeProduto, 880, 3);
-    prodLines.forEach((l, i) => ctx.fillText(l, 96, 368 + i * 52));
+    prodLines.forEach((l, i) => ctx.fillText(l, 96, 368 + i * 50));
 
+    // Keep parcela cleanly left of CARRINHO ABERTO stamp (maxWidth 470: x=96..566, stamp x=650..960)
     ctx.fillStyle = "#1f7a5a";
-    ctx.font = '700 52px "JetBrains Mono", monospace';
-    ctx.fillText(doc.action.parcela, 96, 560);
+    ctx.font = '700 44px "JetBrains Mono", monospace';
+    ctx.fillText(doc.action.parcela, 96, 560, 470);
+
+    drawStamp(ctx, "CARRINHO ABERTO", 805, 545, "#1f7a5a", -0.1, 25);
 
     ctx.fillStyle = "#eef7f3";
     ctx.fillRect(96, 622, 888, 210);
@@ -353,8 +434,6 @@ export async function generateDocumentCard(doc: CabinetDocument): Promise<Blob> 
     ctx.font = '500 24px "Plus Jakarta Sans", system-ui, sans-serif';
     const modLines = wrapText(ctx, doc.action.modulosBonus, 844, 4);
     modLines.forEach((l, i) => ctx.fillText(l, 118, 706 + i * 34));
-
-    drawStamp(ctx, "CARRINHO ABERTO", 765, 535, "#1f7a5a", -0.11);
   }
 
   ctx.strokeStyle = "#131f38";
@@ -366,12 +445,12 @@ export async function generateDocumentCard(doc: CabinetDocument): Promise<Blob> 
 
   ctx.fillStyle = "#131f38";
   ctx.font = '700 22px "Playfair Display", Georgia, serif';
-  ctx.fillText('Dep. Prof.ª Clarice "Clá" Alencar (PFM/SC)', 96, 966);
+  ctx.fillText('Dep. Prof.ª Clarice "Clá" Alencar (PFM/SC)', 96, 966, 530);
 
   ctx.fillStyle = "#5a647a";
   ctx.font = '600 20px "JetBrains Mono", monospace';
   ctx.textAlign = "right";
-  ctx.fillText("gabinetedaclarice.pages.dev", 984, 966);
+  ctx.fillText("gabinetedaclarice.pages.dev", 984, 966, 340);
   ctx.textAlign = "left";
 
   return canvasToBlob(canvas);
@@ -397,13 +476,16 @@ export async function generateDossierCard(ledger: SessionLedger): Promise<Blob> 
   ctx.lineWidth = 4;
   ctx.strokeRect(36, 36, 1008, 1008);
 
+  // Constrain dossier header left of portrait box (portrait starts at x=756, leave 40px gutter -> maxWidth 640)
   ctx.fillStyle = "#d6b26e";
-  ctx.font = '700 21px "JetBrains Mono", monospace';
-  ctx.fillText(
+  ctx.font = '700 20px "JetBrains Mono", monospace';
+  const headerLines = wrapText(
+    ctx,
     `BOLETIM DA GUERRA CULTURAL • ${scenario.title.toUpperCase()}`,
-    76,
-    102
+    640,
+    2
   );
+  headerLines.forEach((l, i) => ctx.fillText(l, 76, 98 + i * 28));
 
   const mood = ledger.bestQuote?.mood || "reels";
   const img = await loadImage(AVATAR_PATHS[mood] || AVATAR_PATHS.neutro);
@@ -421,15 +503,17 @@ export async function generateDossierCard(ledger: SessionLedger): Promise<Blob> 
     ctx.stroke();
   }
 
+  const titleStartY = headerLines.length > 1 ? 192 : 176;
   ctx.fillStyle = "#faf6ef";
-  ctx.font = '700 50px "Playfair Display", Georgia, serif';
+  ctx.font = '700 46px "Playfair Display", Georgia, serif';
   const titleLines = wrapText(ctx, arch.title, 640, 2);
-  titleLines.forEach((l, i) => ctx.fillText(l, 76, 178 + i * 58));
+  titleLines.forEach((l, i) => ctx.fillText(l, 76, titleStartY + i * 54));
 
+  const subStartY = titleStartY + titleLines.length * 54 + 14;
   ctx.fillStyle = "#c8d2e6";
-  ctx.font = '500 25px "Plus Jakarta Sans", system-ui, sans-serif';
+  ctx.font = '500 24px "Plus Jakarta Sans", system-ui, sans-serif';
   const subLines = wrapText(ctx, arch.subtitle, 640, 3);
-  subLines.forEach((l, i) => ctx.fillText(l, 76, 304 + i * 36));
+  subLines.forEach((l, i) => ctx.fillText(l, 76, subStartY + i * 34));
 
   const stats = [
     {
@@ -491,11 +575,11 @@ export async function generateDossierCard(ledger: SessionLedger): Promise<Blob> 
   const qLines = wrapText(ctx, `“${quoteText}”`, 872, 4);
   qLines.forEach((l, i) => ctx.fillText(l, 104, 770 + i * 38));
 
-  drawStamp(ctx, arch.stamp, 810, 954, "#d6b26e", -0.08);
+  drawStamp(ctx, arch.stamp, 810, 954, "#d6b26e", -0.08, 26);
 
   ctx.fillStyle = "#c8d2e6";
   ctx.font = '600 22px "JetBrains Mono", monospace';
-  ctx.fillText("gabinetedaclarice.pages.dev", 76, 976);
+  ctx.fillText("gabinetedaclarice.pages.dev", 76, 976, 500);
 
   return canvasToBlob(canvas);
 }
@@ -539,7 +623,7 @@ export async function shareImageNativeOrCopy(
   filename: string,
   title = "Gabinete da Clarice",
   text = "Olha o que a Dep. Clarice aprontou no Gabinete 222: https://gabinetedaclarice.pages.dev"
-): Promise<"shared" | "copied" | "downloaded"> {
+): Promise<"shared" | "copied" | "downloaded" | "cancelled"> {
   try {
     if (
       typeof navigator !== "undefined" &&
@@ -557,7 +641,7 @@ export async function shareImageNativeOrCopy(
     }
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") {
-      return "shared";
+      return "cancelled";
     }
   }
   return copyImageOrDownload(blob, filename);

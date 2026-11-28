@@ -9,7 +9,10 @@ import {
   Share2,
   ShoppingBag,
 } from "lucide-react";
-import type { ChatEntry } from "../hooks/useGptLiveSession";
+import type {
+  ChatEntry,
+  LiveConnectionState,
+} from "../hooks/useGptLiveSession";
 import type {
   AvatarMood,
   CabinetDocument,
@@ -26,8 +29,9 @@ interface TaquigrafiaPanelProps {
   headlineTicker: string;
   scenarioBadge: string;
   suggestedMoves: SuggestedMove[];
-  isLive: boolean;
+  liveStatus: LiveConnectionState;
   isSendingText: boolean;
+  streamingReplyId: string | null;
   micCutSecondsLeft: number;
   onSendText: (message: string) => void;
   onToggleVoiceCall: () => void;
@@ -73,8 +77,9 @@ export function TaquigrafiaPanel({
   headlineTicker,
   scenarioBadge,
   suggestedMoves,
-  isLive,
+  liveStatus,
   isSendingText,
+  streamingReplyId,
   micCutSecondsLeft,
   onSendText,
   onToggleVoiceCall,
@@ -87,27 +92,70 @@ export function TaquigrafiaPanel({
     label: string;
   } | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
-  const feedRef = useRef<HTMLDivElement | null>(null);
 
+  const feedRef = useRef<HTMLDivElement | null>(null);
+  const isNearBottomRef = useRef(true);
+  const forceScrollNextRef = useRef(true);
+  const prevEntriesLenRef = useRef(entries.length);
+  const toastTimerRef = useRef<number | null>(null);
+  const copiedTimerRef = useRef<number | null>(null);
+
+  const isLive = liveStatus === "live";
+  const isConnecting = liveStatus === "connecting";
   const isInputBlocked = isSendingText || micCutSecondsLeft > 0;
 
-  // Bulletproof scroll-to-bottom on every entry delta, inline act card, typing indicator, or viewport/keyboard resize
+  const hasStreamingContent = Boolean(
+    streamingReplyId &&
+      entries.some(
+        (e) => e.id === streamingReplyId && e.text.trim().length > 0
+      )
+  );
+  const showTypingIndicator = isSendingText && !hasStreamingContent;
+
+  const handleFeedScroll = () => {
+    const feed = feedRef.current;
+    if (!feed) return;
+    const distanceFromBottom =
+      feed.scrollHeight - feed.scrollTop - feed.clientHeight;
+    isNearBottomRef.current = distanceFromBottom < 140;
+  };
+
   useEffect(() => {
     const feed = feedRef.current;
     if (!feed) return;
+
+    const lastEntry = entries[entries.length - 1];
+    const isNewUserEntry =
+      entries.length > prevEntriesLenRef.current && lastEntry?.role === "user";
+    const isReset = entries.length <= 1;
+    prevEntriesLenRef.current = entries.length;
+
+    const shouldAutoScroll =
+      forceScrollNextRef.current ||
+      isNewUserEntry ||
+      isReset ||
+      isNearBottomRef.current;
+    forceScrollNextRef.current = false;
+
+    if (!shouldAutoScroll) return;
+
     const scrollToBottom = () => {
       feed.scrollTop = feed.scrollHeight;
     };
+
+    let raf2: number | null = null;
     const raf1 = requestAnimationFrame(() => {
       scrollToBottom();
-      requestAnimationFrame(scrollToBottom);
+      raf2 = requestAnimationFrame(scrollToBottom);
     });
     const timer = window.setTimeout(scrollToBottom, 80);
+
     return () => {
       cancelAnimationFrame(raf1);
+      if (raf2 !== null) cancelAnimationFrame(raf2);
       window.clearTimeout(timer);
     };
-  }, [entries, isSendingText]);
+  }, [entries, showTypingIndicator]);
 
   useEffect(() => {
     const feed = feedRef.current;
@@ -123,17 +171,33 @@ export function TaquigrafiaPanel({
     return () => ro.disconnect();
   }, []);
 
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current !== null) {
+        window.clearTimeout(toastTimerRef.current);
+      }
+      if (copiedTimerRef.current !== null) {
+        window.clearTimeout(copiedTimerRef.current);
+      }
+    };
+  }, []);
+
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
     const trimmed = draft.trim();
     if (!trimmed || isInputBlocked) return;
     setDraft("");
+    forceScrollNextRef.current = true;
     onSendText(trimmed);
   };
 
   const showToast = (msg: string) => {
     setToastMsg(msg);
-    window.setTimeout(() => {
+    if (toastTimerRef.current !== null) {
+      window.clearTimeout(toastTimerRef.current);
+    }
+    toastTimerRef.current = window.setTimeout(() => {
+      toastTimerRef.current = null;
       setToastMsg((curr) => (curr === msg ? null : curr));
     }, 2600);
   };
@@ -153,6 +217,7 @@ export function TaquigrafiaPanel({
         "Corte do Gabinete 222 — Gabinete da Clarice",
         `"${entry.text}" — Dep. Prof.ª Clarice Alencar (https://gabinetedaclarice.pages.dev)`
       );
+      if (result === "cancelled") return;
       const label =
         result === "shared"
           ? "Enviado!"
@@ -167,7 +232,11 @@ export function TaquigrafiaPanel({
           ? "Card PNG copiado! Cole no WhatsApp."
           : "Card PNG salvo no seu dispositivo!"
       );
-      window.setTimeout(() => {
+      if (copiedTimerRef.current !== null) {
+        window.clearTimeout(copiedTimerRef.current);
+      }
+      copiedTimerRef.current = window.setTimeout(() => {
+        copiedTimerRef.current = null;
         setCopiedMeta((curr) => (curr?.id === entry.id ? null : curr));
       }, 2600);
     } catch {
@@ -193,7 +262,7 @@ export function TaquigrafiaPanel({
         </div>
       )}
 
-      <div className="chat-feed" ref={feedRef}>
+      <div className="chat-feed" ref={feedRef} onScroll={handleFeedScroll}>
         {entries.map((entry) => {
           if (entry.document) {
             const doc = entry.document;
@@ -233,7 +302,11 @@ export function TaquigrafiaPanel({
           }
 
           const isAssistant = entry.role === "assistant";
-          const canShare = isAssistant && entry.text.trim().length >= 24;
+          const isStreamingBubble = streamingReplyId === entry.id;
+          const canShare =
+            isAssistant &&
+            !isStreamingBubble &&
+            entry.text.trim().length >= 24;
           const isBusy = sharingId === entry.id;
           const isDone = copiedMeta?.id === entry.id;
 
@@ -276,7 +349,7 @@ export function TaquigrafiaPanel({
           );
         })}
 
-        {isSendingText && (
+        {showTypingIndicator && (
           <div className="msg-bubble is-system is-typing">
             Dep. Clarice está ajustando o ring light pra responder...
           </div>
@@ -287,17 +360,35 @@ export function TaquigrafiaPanel({
         moves={suggestedMoves}
         disabled={isInputBlocked}
         onPickMove={(prompt) => {
-          if (!isInputBlocked) onSendText(prompt);
+          if (!isInputBlocked) {
+            forceScrollNextRef.current = true;
+            onSendText(prompt);
+          }
         }}
       />
 
       <form className="chat-composer" onSubmit={handleSubmit}>
         <button
           type="button"
-          className={`composer-mic-btn ${isLive ? "is-live" : ""}`}
+          className={`composer-mic-btn ${
+            isLive ? "is-live" : isConnecting ? "is-connecting" : ""
+          }`}
+          disabled={micCutSecondsLeft > 0 || isConnecting}
           onClick={onToggleVoiceCall}
-          title={isLive ? "Encerrar voz ao vivo" : "Falar por voz ao vivo"}
-          aria-label={isLive ? "Encerrar voz ao vivo" : "Falar por voz ao vivo"}
+          title={
+            isLive
+              ? "Encerrar voz ao vivo"
+              : isConnecting
+              ? "Conectando voz ao vivo..."
+              : "Falar por voz ao vivo"
+          }
+          aria-label={
+            isLive
+              ? "Encerrar voz ao vivo"
+              : isConnecting
+              ? "Conectando voz ao vivo"
+              : "Falar por voz ao vivo"
+          }
         >
           {isLive ? <MicOff size={18} /> : <Mic size={18} />}
         </button>
@@ -305,6 +396,7 @@ export function TaquigrafiaPanel({
         <input
           type="text"
           className="chat-input"
+          aria-label="Mensagem para a Deputada Clarice"
           value={draft}
           disabled={micCutSecondsLeft > 0}
           onChange={(e) => setDraft(e.target.value)}

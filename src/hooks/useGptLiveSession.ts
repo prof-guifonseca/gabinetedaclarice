@@ -30,6 +30,8 @@ interface ConnectOptions {
 }
 
 const SESSION_DURATION_SEC = 300;
+const METER_INTERVAL_MS = 72; // ~14 Hz
+const METER_DEADBAND = 0.03;
 
 function formatNow(): string {
   return new Date().toLocaleTimeString("pt-BR", {
@@ -66,6 +68,17 @@ async function waitForIceGathering(
   });
 }
 
+function stopMediaStream(stream: MediaStream | null): void {
+  if (!stream) return;
+  for (const track of stream.getTracks()) {
+    try {
+      track.stop();
+    } catch {
+      // ignore
+    }
+  }
+}
+
 export function useGptLiveSession(options: {
   onTranscriptDelta: (
     role: "user" | "assistant",
@@ -100,9 +113,15 @@ export function useGptLiveSession(options: {
   const userMutedPrefRef = useRef<boolean>(false);
   const openingCueRef = useRef<string>(LIVE_OPENING_CUE);
 
+  const connectAttemptRef = useRef<number>(0);
+  const connectAbortRef = useRef<AbortController | null>(null);
+  const sessionDeadlineRef = useRef<number | null>(null);
+
   const lastUserUtteranceRef = useRef<string>("");
   const currentAssistantUtteranceRef = useRef<string>("");
   const inputDeltaItemIdsRef = useRef<Set<string>>(new Set());
+  const activeUserTurnKeyRef = useRef<string | null>(null);
+  const userUtteranceSeqRef = useRef<number>(0);
   const turnFlushTimerRef = useRef<number | null>(null);
 
   const callbacksRef = useRef(options);
@@ -117,10 +136,18 @@ export function useGptLiveSession(options: {
     if (assistantText.length < 8) return;
     const userText = lastUserUtteranceRef.current.trim();
     currentAssistantUtteranceRef.current = "";
+    lastUserUtteranceRef.current = "";
+    activeUserTurnKeyRef.current = null;
     callbacksRef.current.onLiveTurnComplete?.(userText, assistantText);
   }, []);
 
   const cleanup = useCallback(() => {
+    if (connectAbortRef.current) {
+      connectAbortRef.current.abort();
+      connectAbortRef.current = null;
+    }
+    sessionDeadlineRef.current = null;
+
     if (rafRef.current !== null) {
       cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
@@ -146,17 +173,18 @@ export function useGptLiveSession(options: {
       dcRef.current = null;
     }
     if (pcRef.current) {
+      const oldPc = pcRef.current;
+      pcRef.current = null;
+      oldPc.onconnectionstatechange = null;
+      oldPc.ontrack = null;
       try {
-        pcRef.current.close();
+        oldPc.close();
       } catch {
         // ignore
       }
-      pcRef.current = null;
     }
     if (localStreamRef.current) {
-      for (const track of localStreamRef.current.getTracks()) {
-        track.stop();
-      }
+      stopMediaStream(localStreamRef.current);
       localStreamRef.current = null;
     }
     if (audioElRef.current) {
@@ -171,6 +199,7 @@ export function useGptLiveSession(options: {
     userMutedPrefRef.current = false;
     lastUserUtteranceRef.current = "";
     currentAssistantUtteranceRef.current = "";
+    activeUserTurnKeyRef.current = null;
     inputDeltaItemIdsRef.current.clear();
     setIsMuted(false);
     setIsForceMuted(false);
@@ -183,6 +212,7 @@ export function useGptLiveSession(options: {
 
   const disconnect = useCallback(
     (reason?: string) => {
+      connectAttemptRef.current += 1;
       cleanup();
       setStatus("idle");
       if (reason) {
@@ -211,41 +241,88 @@ export function useGptLiveSession(options: {
       openingCue = LIVE_OPENING_CUE,
       accessCode,
     }: ConnectOptions = {}) => {
+      const attemptId = ++connectAttemptRef.current;
       cleanup();
       setError(null);
       setStatus("connecting");
       openingCueRef.current = openingCue;
+
+      const isStale = () => attemptId !== connectAttemptRef.current;
+      const abortController = new AbortController();
+      connectAbortRef.current = abortController;
+
+      let localAudioCtx: AudioContext | null = null;
+      let localStream: MediaStream | null = null;
+      let pc: RTCPeerConnection | null = null;
+
+      const disposeLocal = () => {
+        if (pc) {
+          pc.onconnectionstatechange = null;
+          pc.ontrack = null;
+          try {
+            pc.close();
+          } catch {
+            // ignore
+          }
+          if (pcRef.current === pc) pcRef.current = null;
+          pc = null;
+        }
+        if (localStream) {
+          stopMediaStream(localStream);
+          if (localStreamRef.current === localStream) {
+            localStreamRef.current = null;
+          }
+          localStream = null;
+        }
+        if (localAudioCtx) {
+          localAudioCtx.close().catch(() => {});
+          if (audioCtxRef.current === localAudioCtx) {
+            audioCtxRef.current = null;
+          }
+          localAudioCtx = null;
+        }
+      };
 
       try {
         const AudioCtx =
           window.AudioContext ||
           (window as unknown as { webkitAudioContext: typeof AudioContext })
             .webkitAudioContext;
-        const audioCtx = new AudioCtx();
-        await audioCtx.resume().catch(() => {});
-        audioCtxRef.current = audioCtx;
+        localAudioCtx = new AudioCtx();
+        await localAudioCtx.resume().catch(() => {});
+        if (isStale()) {
+          disposeLocal();
+          return;
+        }
+        audioCtxRef.current = localAudioCtx;
 
-        const localStream = await navigator.mediaDevices.getUserMedia({
+        localStream = await navigator.mediaDevices.getUserMedia({
           audio: {
             echoCancellation: true,
             noiseSuppression: true,
             autoGainControl: true,
           },
         });
+        if (isStale()) {
+          disposeLocal();
+          return;
+        }
         localStreamRef.current = localStream;
 
-        const inSource = audioCtx.createMediaStreamSource(localStream);
-        const inAnalyser = audioCtx.createAnalyser();
+        const inSource = localAudioCtx.createMediaStreamSource(localStream);
+        const inAnalyser = localAudioCtx.createAnalyser();
         inAnalyser.fftSize = 256;
         inSource.connect(inAnalyser);
 
         let outAnalyser: AnalyserNode | null = null;
 
-        const pc = new RTCPeerConnection();
-        pcRef.current = pc;
+        pc = new RTCPeerConnection();
+        const activePc = pc;
+        const activeAudioCtx = localAudioCtx;
+        pcRef.current = activePc;
 
         for (const track of localStream.getTracks()) {
-          pc.addTrack(track, localStream);
+          activePc.addTrack(track, localStream);
         }
 
         const audioEl = document.createElement("audio");
@@ -253,14 +330,15 @@ export function useGptLiveSession(options: {
         audioEl.setAttribute("playsinline", "true");
         audioElRef.current = audioEl;
 
-        pc.ontrack = (event) => {
+        activePc.ontrack = (event) => {
+          if (pcRef.current !== activePc) return;
           const remoteStream = event.streams[0];
           if (!remoteStream) return;
           audioEl.srcObject = remoteStream;
           audioEl.play().catch(() => {});
           try {
-            const outSource = audioCtx.createMediaStreamSource(remoteStream);
-            outAnalyser = audioCtx.createAnalyser();
+            const outSource = activeAudioCtx.createMediaStreamSource(remoteStream);
+            outAnalyser = activeAudioCtx.createAnalyser();
             outAnalyser.fftSize = 256;
             outAnalyser.smoothingTimeConstant = 0.65;
             outSource.connect(outAnalyser);
@@ -269,11 +347,13 @@ export function useGptLiveSession(options: {
           }
         };
 
-        pc.onconnectionstatechange = () => {
+        activePc.onconnectionstatechange = () => {
+          if (pcRef.current !== activePc) return;
           if (
-            pc.connectionState === "failed" ||
-            pc.connectionState === "closed"
+            activePc.connectionState === "failed" ||
+            activePc.connectionState === "closed"
           ) {
+            cleanup();
             setStatus("idle");
             setIsStandby(false);
           }
@@ -282,45 +362,71 @@ export function useGptLiveSession(options: {
         const inBuf = new Uint8Array(inAnalyser.frequencyBinCount);
         const outTimeBuf = new Uint8Array(128);
         const outFreqBuf = new Uint8Array(128);
+        let lastMeterCommit = 0;
+        let lastInputSent = -1;
+        let lastOutputSent = -1;
+        let lastSpeakingSent = false;
 
-        const meterLoop = () => {
-          if (!pcRef.current) return;
+        const meterLoop = (now: number) => {
+          if (pcRef.current !== activePc) return;
 
-          inAnalyser.getByteTimeDomainData(inBuf);
-          let inSum = 0;
-          for (let i = 0; i < inBuf.length; i++) {
-            const v = (inBuf[i] - 128) / 128;
-            inSum += v * v;
-          }
-          setInputLevel(Math.min(1, Math.sqrt(inSum / inBuf.length) * 3.8));
+          if (now - lastMeterCommit >= METER_INTERVAL_MS) {
+            lastMeterCommit = now;
 
-          if (outAnalyser) {
-            outAnalyser.getByteTimeDomainData(outTimeBuf);
-            outAnalyser.getByteFrequencyData(outFreqBuf);
-
-            let outSum = 0;
-            for (let i = 0; i < outTimeBuf.length; i++) {
-              const v = (outTimeBuf[i] - 128) / 128;
-              outSum += v * v;
+            inAnalyser.getByteTimeDomainData(inBuf);
+            let inSum = 0;
+            for (let i = 0; i < inBuf.length; i++) {
+              const v = (inBuf[i] - 128) / 128;
+              inSum += v * v;
             }
-            const rms = Math.sqrt(outSum / outTimeBuf.length) * 4.2;
-
-            let voiceBandSum = 0;
-            const startBin = 2;
-            const endBin = Math.min(26, outFreqBuf.length);
-            for (let i = startBin; i < endBin; i++) {
-              voiceBandSum += outFreqBuf[i] / 255;
+            const nextIn = Math.min(1, Math.sqrt(inSum / inBuf.length) * 3.8);
+            if (
+              Math.abs(nextIn - lastInputSent) >= METER_DEADBAND ||
+              (nextIn === 0 && lastInputSent !== 0)
+            ) {
+              lastInputSent = nextIn;
+              setInputLevel(nextIn);
             }
-            const voiceBand = voiceBandSum / Math.max(1, endBin - startBin);
-            const blended = Math.min(1, rms * 0.65 + voiceBand * 0.55);
-            setOutputLevel(blended);
 
-            const now = performance.now();
-            if (blended > 0.055) {
-              speakingHoldRef.current = now + 280;
-              setIsSpeaking(true);
-            } else if (now > speakingHoldRef.current) {
-              setIsSpeaking(false);
+            if (outAnalyser) {
+              outAnalyser.getByteTimeDomainData(outTimeBuf);
+              outAnalyser.getByteFrequencyData(outFreqBuf);
+
+              let outSum = 0;
+              for (let i = 0; i < outTimeBuf.length; i++) {
+                const v = (outTimeBuf[i] - 128) / 128;
+                outSum += v * v;
+              }
+              const rms = Math.sqrt(outSum / outTimeBuf.length) * 4.2;
+
+              let voiceBandSum = 0;
+              const startBin = 2;
+              const endBin = Math.min(26, outFreqBuf.length);
+              for (let i = startBin; i < endBin; i++) {
+                voiceBandSum += outFreqBuf[i] / 255;
+              }
+              const voiceBand = voiceBandSum / Math.max(1, endBin - startBin);
+              const blended = Math.min(1, rms * 0.65 + voiceBand * 0.55);
+
+              if (
+                Math.abs(blended - lastOutputSent) >= METER_DEADBAND ||
+                (blended === 0 && lastOutputSent !== 0)
+              ) {
+                lastOutputSent = blended;
+                setOutputLevel(blended);
+              }
+
+              let nextSpeaking = lastSpeakingSent;
+              if (blended > 0.055) {
+                speakingHoldRef.current = now + 280;
+                nextSpeaking = true;
+              } else if (now > speakingHoldRef.current) {
+                nextSpeaking = false;
+              }
+              if (nextSpeaking !== lastSpeakingSent) {
+                lastSpeakingSent = nextSpeaking;
+                setIsSpeaking(nextSpeaking);
+              }
             }
           }
 
@@ -328,10 +434,11 @@ export function useGptLiveSession(options: {
         };
         rafRef.current = requestAnimationFrame(meterLoop);
 
-        const dc = pc.createDataChannel("oai-events");
+        const dc = activePc.createDataChannel("oai-events");
         dcRef.current = dc;
 
         dc.onmessage = (event) => {
+          if (pcRef.current !== activePc) return;
           try {
             const msg = JSON.parse(event.data) as Record<string, unknown>;
             const type = String(msg.type ?? "");
@@ -429,7 +536,19 @@ export function useGptLiveSession(options: {
               const delta = String(msg.delta ?? "");
               if (delta) {
                 setIsStandby(false);
-                const key = itemKey ? `usr-${itemKey}` : "usr-active";
+                let key: string;
+                if (itemKey) {
+                  key = `usr-${itemKey}`;
+                  if (!inputDeltaItemIdsRef.current.has(key)) {
+                    lastUserUtteranceRef.current = "";
+                  }
+                } else {
+                  if (!activeUserTurnKeyRef.current) {
+                    activeUserTurnKeyRef.current = `usr-live-${++userUtteranceSeqRef.current}`;
+                    lastUserUtteranceRef.current = "";
+                  }
+                  key = activeUserTurnKeyRef.current;
+                }
                 inputDeltaItemIdsRef.current.add(key);
                 lastUserUtteranceRef.current += delta;
                 callbacksRef.current.onTranscriptDelta("user", delta, key, false);
@@ -442,7 +561,11 @@ export function useGptLiveSession(options: {
               type === "conversation.item.input_audio_transcription.completed"
             ) {
               const transcript = String(msg.transcript ?? "").trim();
-              const key = itemKey ? `usr-${itemKey}` : "usr-active";
+              const key = itemKey
+                ? `usr-${itemKey}`
+                : activeUserTurnKeyRef.current ||
+                  `usr-live-${++userUtteranceSeqRef.current}`;
+              activeUserTurnKeyRef.current = null;
               if (transcript) {
                 lastUserUtteranceRef.current = transcript;
                 const hadDeltas = inputDeltaItemIdsRef.current.has(key);
@@ -458,20 +581,32 @@ export function useGptLiveSession(options: {
             }
 
             if (type === "error" || type === "session.error") {
-              const errObj = msg.error as { message?: string } | undefined;
-              const detail = errObj?.message || JSON.stringify(msg).slice(0, 220);
-              setError(`Erro na chamada de voz: ${detail}`);
+              setError(
+                "Erro técnico na chamada de voz do Gabinete 222. Tente reconectar."
+              );
             }
           } catch {
             // ignore non-JSON frames
           }
         };
 
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        await waitForIceGathering(pc);
+        const offer = await activePc.createOffer();
+        if (isStale()) {
+          disposeLocal();
+          return;
+        }
+        await activePc.setLocalDescription(offer);
+        if (isStale()) {
+          disposeLocal();
+          return;
+        }
+        await waitForIceGathering(activePc);
+        if (isStale()) {
+          disposeLocal();
+          return;
+        }
 
-        const localSdp = pc.localDescription?.sdp || offer.sdp;
+        const localSdp = activePc.localDescription?.sdp || offer.sdp;
         if (!localSdp) {
           throw new Error("Não foi possível iniciar a conexão WebRTC.");
         }
@@ -486,13 +621,21 @@ export function useGptLiveSession(options: {
             ledger,
             accessCode,
           }),
+          signal: abortController.signal,
         });
+        if (isStale()) {
+          disposeLocal();
+          return;
+        }
 
         const data = (await res.json().catch(() => ({}))) as {
           error?: string;
-          detail?: string;
           transport?: { sdp?: string };
         };
+        if (isStale()) {
+          disposeLocal();
+          return;
+        }
 
         if (res.status === 401) {
           cleanup();
@@ -504,33 +647,49 @@ export function useGptLiveSession(options: {
 
         if (!res.ok || !data.transport?.sdp) {
           throw new Error(
-            data.error
-              ? `${data.error}${data.detail ? ` (${data.detail})` : ""}`
-              : `Falha HTTP ${res.status} ao conectar voz.`
+            data.error || `Falha HTTP ${res.status} ao conectar voz.`
           );
         }
 
-        await pc.setRemoteDescription({
+        await activePc.setRemoteDescription({
           type: "answer",
           sdp: data.transport.sdp,
         });
+        if (isStale()) {
+          disposeLocal();
+          return;
+        }
+
+        if (connectAbortRef.current === abortController) {
+          connectAbortRef.current = null;
+        }
 
         setStatus("live");
+        sessionDeadlineRef.current = Date.now() + SESSION_DURATION_SEC * 1000;
         setRemainingSeconds(SESSION_DURATION_SEC);
 
         timerRef.current = window.setInterval(() => {
-          setRemainingSeconds((prev) => {
-            if (prev <= 1) {
-              disconnect(
-                "Sessão de voz pausada após 5 minutos. Clique em 'Falar ao vivo com a Clarice' para retomar."
-              );
-              return 0;
-            }
-            return prev - 1;
-          });
+          const deadline = sessionDeadlineRef.current;
+          if (!deadline) return;
+          const secsLeft = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+          if (secsLeft <= 0) {
+            disconnect(
+              "Sessão de voz pausada após 5 minutos. Clique em 'Falar ao vivo com a Clarice' para retomar."
+            );
+            return;
+          }
+          setRemainingSeconds(secsLeft);
         }, 1000);
       } catch (err) {
+        if (isStale()) {
+          disposeLocal();
+          return;
+        }
         cleanup();
+        if (err instanceof DOMException && err.name === "AbortError") {
+          setStatus("idle");
+          return;
+        }
         const message =
           err instanceof DOMException && err.name === "NotAllowedError"
             ? "Permissão de microfone negada. Libere o microfone ou continue digitando no chat ao lado."
@@ -548,14 +707,12 @@ export function useGptLiveSession(options: {
     if (isForceMuted) return;
     const stream = localStreamRef.current;
     if (!stream) return;
-    setIsMuted((prev) => {
-      const next = !prev;
-      userMutedPrefRef.current = next;
-      for (const track of stream.getAudioTracks()) {
-        track.enabled = !next;
-      }
-      return next;
-    });
+    const next = !userMutedPrefRef.current;
+    userMutedPrefRef.current = next;
+    for (const track of stream.getAudioTracks()) {
+      track.enabled = !next;
+    }
+    setIsMuted(next);
   }, [isForceMuted]);
 
   const forceMuteFor = useCallback((seconds: number) => {
@@ -586,19 +743,27 @@ export function useGptLiveSession(options: {
   }, []);
 
   const extendSession = useCallback(() => {
-    setRemainingSeconds((prev) => Math.min(600, prev + 180));
+    const now = Date.now();
+    const currentDeadline = sessionDeadlineRef.current ?? now;
+    const nextDeadline = Math.min(now + 600_000, currentDeadline + 180_000);
+    sessionDeadlineRef.current = nextDeadline;
+    setRemainingSeconds(Math.max(0, Math.ceil((nextDeadline - now) / 1000)));
   }, []);
 
   const sendLiveTextMessage = useCallback(
     (text: string): boolean => {
-      lastUserUtteranceRef.current = text;
-      setIsStandby(false);
-      return sendDataEvent({
+      const ok = sendDataEvent({
         type: "session.commentary.append",
         event_id: makeId("txt-comm"),
         delegation_id: null,
         content: `O visitante acabou de dizer na sua frente: "${text}". Responda agora em voz alta (1 a 2 frases curtas, ~180 caracteres), 100% no personagem Deputada Clarice sem filtro.`,
       });
+      if (ok) {
+        lastUserUtteranceRef.current = text;
+        activeUserTurnKeyRef.current = null;
+        setIsStandby(false);
+      }
+      return ok;
     },
     [sendDataEvent]
   );
@@ -624,7 +789,10 @@ export function useGptLiveSession(options: {
   );
 
   useEffect(() => {
-    return () => cleanup();
+    return () => {
+      connectAttemptRef.current += 1;
+      cleanup();
+    };
   }, [cleanup]);
 
   return {

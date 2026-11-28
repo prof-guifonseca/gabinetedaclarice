@@ -61,6 +61,13 @@ input {
   font-family: inherit;
 }
 
+button:focus-visible,
+a:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--gold-bright);
+  outline-offset: 2px;
+}
+
 .app-shell {
   min-height: 100dvh;
   display: flex;
@@ -533,17 +540,18 @@ input {
 }
 
 .interrupt-ribbon {
-  position: absolute;
-  left: 12px;
-  right: 12px;
-  bottom: 66px;
-  z-index: 5;
+  position: fixed;
+  top: calc(68px + env(safe-area-inset-top));
+  right: 20px;
+  width: min(390px, calc(100vw - 40px));
+  z-index: 45;
   display: flex;
   align-items: flex-start;
   gap: 8px;
   padding: 9px 11px;
   border-radius: 10px;
-  background: rgba(12, 20, 38, 0.94);
+  background: rgba(12, 20, 38, 0.96);
+  backdrop-filter: blur(10px);
   border: 1px solid rgba(217, 76, 113, 0.72);
   color: var(--text-primary);
   box-shadow: 0 10px 26px rgba(0, 0, 0, 0.55);
@@ -594,10 +602,14 @@ input {
   color: #ffffff;
 }
 
-.mic-cut-overlay span {
+.mic-cut-overlay .mic-cut-detail {
   font-family: var(--font-mono);
   font-size: 0.72rem;
   color: var(--gold-bright);
+}
+
+.mic-cut-overlay .mic-cut-countdown {
+  display: none;
 }
 
 .avatar-caption {
@@ -814,9 +826,8 @@ input {
   position: relative;
   display: flex;
   flex-direction: column;
-  min-height: 440px;
-  height: calc(100dvh - 196px);
-  max-height: 675px;
+  min-height: 420px;
+  height: clamp(420px, calc(100dvh - 232px), 680px);
 }
 
 .chat-toast {
@@ -1166,6 +1177,17 @@ input {
   border-color: var(--rose);
   background: rgba(194, 65, 99, 0.25);
   color: #ffc2d2;
+}
+
+.composer-mic-btn.is-connecting {
+  border-color: var(--gold-bright);
+  background: rgba(214, 178, 110, 0.16);
+  color: var(--gold-bright);
+}
+
+.composer-mic-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .chat-input {
@@ -1856,9 +1878,9 @@ input {
   letter-spacing: 0.05em;
 }
 
-.paper-stamp.is-green {
-  border-color: #1f7a5a;
-  color: #1f7a5a;
+.paper-stamp.is-rose {
+  border-color: #b83b5e;
+  color: #b83b5e;
 }
 
 .paper-mono {
@@ -1867,21 +1889,6 @@ input {
   font-size: 0.76rem;
   font-weight: 700;
   color: #364563;
-}
-
-.paper-amount {
-  font-family: var(--font-serif);
-  font-size: 1.9rem;
-  font-weight: 700;
-  color: #1f7a5a;
-}
-
-.paper-dossier-title {
-  margin: 0;
-  font-family: var(--font-serif);
-  font-size: 1.2rem;
-  color: #b83b5e;
-  line-height: 1.3;
 }
 
 .paper-paragraph {
@@ -2167,7 +2174,7 @@ input {
   }
 
   .cabinet-header {
-    padding: 7px 10px;
+    padding: max(7px, env(safe-area-inset-top)) 10px 7px;
     gap: 6px;
     flex-shrink: 0;
   }
@@ -2334,18 +2341,33 @@ input {
     position: fixed;
     left: 10px;
     right: 10px;
-    top: 52px;
+    top: calc(52px + env(safe-area-inset-top));
     bottom: auto;
+    width: auto;
     z-index: 45;
   }
 
   .mic-cut-overlay {
     padding: 4px;
+    gap: 3px;
   }
 
   .mic-cut-overlay strong,
-  .mic-cut-overlay span {
+  .mic-cut-overlay .mic-cut-detail {
     display: none;
+  }
+
+  .mic-cut-overlay .mic-cut-countdown {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: rgba(194, 65, 99, 0.85);
+    border: 1px solid var(--gold-bright);
+    font-family: var(--font-mono);
+    font-size: 0.66rem;
+    font-weight: 700;
+    color: #ffffff;
+    line-height: 1.25;
   }
 
   .stage-controls {
@@ -2491,7 +2513,7 @@ input {
 
   .chat-input {
     padding: 9px 11px;
-    font-size: 0.9rem;
+    font-size: 16px;
   }
 
   /* Modals on mobile */
@@ -2538,5 +2560,60 @@ input {
   .trinca-pill {
     white-space: nowrap;
     flex-shrink: 0;
+  }
+}
+
+/* Narrow 360px phones: prevent header & compact meters crowding */
+@media (max-width: 400px) {
+  .cabinet-header {
+    padding: max(6px, env(safe-area-inset-top)) 8px 6px;
+    gap: 4px;
+  }
+
+  .brand-title {
+    font-size: 0.86rem;
+  }
+
+  .header-actions {
+    gap: 4px;
+  }
+
+  .header-btn {
+    padding: 4px 6px;
+    font-size: 0.68rem;
+    gap: 4px;
+  }
+
+  .header-btn.icon-only {
+    padding: 4px 6px;
+  }
+
+  .mobile-meters-compact {
+    gap: 4px;
+  }
+
+  .act-chip {
+    padding: 3px 6px;
+    font-size: 0.6rem;
+  }
+
+  .mini-stat {
+    font-size: 0.61rem;
+    gap: 2px;
+  }
+
+  .mobile-stage-id strong {
+    font-size: 0.82rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }
